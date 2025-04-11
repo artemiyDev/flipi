@@ -1,3 +1,4 @@
+![img.png](logo.png)
 🧠 Flipi — Telegram Anki-Style Flashcard Bot
 Flipi is a Telegram bot that helps you learn and retain information using spaced repetition (similar to Anki) — all within a simple chat interface.
 
