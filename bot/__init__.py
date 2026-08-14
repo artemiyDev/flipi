@@ -1,0 +1,1 @@
+"""Telegram SRS bot package."""

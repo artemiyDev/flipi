@@ -1,0 +1,38 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: ankibot-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ankibot
+      POSTGRES_USER: ankibot
+      POSTGRES_PASSWORD: ankibot
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ankibot -d ankibot"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  bot:
+    build: .
+    container_name: ankibot
+    restart: unless-stopped
+    environment:
+      BOT_TOKEN: ${BOT_TOKEN:-}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://ankibot:ankibot@db:5432/ankibot}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      AUTO_CREATE_TABLES: ${AUTO_CREATE_TABLES:-false}
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-m", "bot.healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  postgres_data:
