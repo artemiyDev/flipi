@@ -60,6 +60,7 @@ class Deck(Base):
     parent_id: Mapped[int | None] = mapped_column(ForeignKey("decks.id", ondelete="SET NULL"))
     name: Mapped[str] = mapped_column(String(255))
     description: Mapped[str | None] = mapped_column(Text)
+    source_slug: Mapped[str | None] = mapped_column(String(64), index=True)
     is_archived: Mapped[bool] = mapped_column(Boolean, default=False)
     new_cards_per_day: Mapped[int] = mapped_column(Integer, default=20)
     reviews_per_day: Mapped[int] = mapped_column(Integer, default=200)
@@ -80,6 +81,22 @@ class Deck(Base):
     parent: Mapped["Deck | None"] = relationship(remote_side=[id])
     notes: Mapped[list["Note"]] = relationship(back_populates="deck")
     cards: Mapped[list["Card"]] = relationship(back_populates="deck")
+
+
+class SharedDeck(Base):
+    __tablename__ = "shared_decks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    slug: Mapped[str] = mapped_column(String(64), unique=True)
+    title: Mapped[str] = mapped_column(String(255))
+    description: Mapped[str] = mapped_column(Text)
+    language: Mapped[str] = mapped_column(String(16))
+    tags: Mapped[list[str]] = mapped_column(JSONB, default=list)
+    notes: Mapped[list[dict]] = mapped_column(JSONB, default=list)
+    notes_count: Mapped[int] = mapped_column(Integer)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
 
 
 class Note(Base):

@@ -30,6 +30,11 @@ from bot.services.cards import (
     set_card_suspended,
     update_note,
 )
+from bot.services.catalog import (
+    CatalogDeckAlreadyInstalledError,
+    install_catalog_deck,
+    list_catalog_decks,
+)
 from bot.services.decks import (
     DECK_OPTION_PRESETS,
     DeckNameConflictError,
@@ -492,6 +497,29 @@ async def me(user: Annotated[User, Depends(get_current_user)]) -> dict:
         "telegram_id": user.telegram_id,
         "timezone": user.timezone,
     }
+
+
+@router.get("/catalog")
+async def catalog(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> list[dict]:
+    return await list_catalog_decks(session, user)
+
+
+@router.post("/catalog/{slug}/install")
+async def install_catalog(
+    slug: str,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> dict:
+    try:
+        result = await install_catalog_deck(session, user, slug)
+    except CatalogDeckAlreadyInstalledError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Catalog deck not found")
+    return {"deck_id": result.deck_id, "added": result.added}
 
 
 @router.get("/decks")

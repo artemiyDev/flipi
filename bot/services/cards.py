@@ -186,6 +186,7 @@ async def create_basic_note(
     template_ord: int = 0,
     question_template: str | None = None,
     answer_template: str | None = None,
+    commit: bool = True,
 ) -> Note:
     now = datetime.now(UTC)
     note = Note(
@@ -232,7 +233,10 @@ async def create_basic_note(
             )
         )
 
-    await session.commit()
+    if commit:
+        await session.commit()
+    else:
+        await session.flush()
     await session.refresh(note)
     return note
 

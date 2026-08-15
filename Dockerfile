@@ -25,6 +25,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY bot ./bot
 COPY app ./app
+COPY seed ./seed
 COPY migrations ./migrations
 COPY alembic.ini .
 COPY --from=frontend-build /frontend/dist ./frontend/dist
