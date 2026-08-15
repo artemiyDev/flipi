@@ -71,10 +71,13 @@ async def get_or_create_deck(
     user: User,
     name: str,
     description: str | None = None,
-    parent: Deck | None = None,
 ) -> Deck:
     result = await session.execute(
-        select(Deck).where(Deck.user_id == user.id, Deck.name == name.strip())
+        select(Deck).where(
+            Deck.user_id == user.id,
+            Deck.parent_id.is_(None),
+            Deck.name == name.strip(),
+        )
     )
     deck = result.scalar_one_or_none()
     if deck is not None:
@@ -82,7 +85,7 @@ async def get_or_create_deck(
             deck.is_archived = False
             await session.commit()
         return deck
-    return await create_deck(session, user, name, description, parent)
+    return await create_deck(session, user, name, description)
 
 
 async def resolve_apkg_deck(
@@ -101,8 +104,15 @@ async def resolve_apkg_deck(
         return existing
 
     parent = None
-    for segment in name.split("::"):
-        parent = await get_or_create_deck(session, user, segment, description, parent)
+    segments = name.split("::")
+    for index, segment in enumerate(segments):
+        parent = await get_or_create_child_deck(
+            session,
+            user,
+            segment,
+            parent,
+            description if index == len(segments) - 1 else None,
+        )
     return parent
 
 
@@ -112,9 +122,37 @@ async def _get_deck_by_name(
     name: str,
 ) -> Deck | None:
     result = await session.execute(
-        select(Deck).where(Deck.user_id == user.id, Deck.name == name)
+        select(Deck).where(
+            Deck.user_id == user.id,
+            Deck.parent_id.is_(None),
+            Deck.name == name,
+        )
     )
     return result.scalar_one_or_none()
+
+
+async def get_or_create_child_deck(
+    session: AsyncSession,
+    user: User,
+    name: str,
+    parent: Deck | None,
+    description: str | None = None,
+) -> Deck:
+    parent_clause = Deck.parent_id.is_(None) if parent is None else Deck.parent_id == parent.id
+    result = await session.execute(
+        select(Deck).where(
+            Deck.user_id == user.id,
+            parent_clause,
+            Deck.name == name.strip(),
+        )
+    )
+    deck = result.scalar_one_or_none()
+    if deck is not None:
+        if deck.is_archived:
+            deck.is_archived = False
+            await session.commit()
+        return deck
+    return await create_deck(session, user, name, description, parent)
 
 
 def deck_full_path(deck: Deck, decks_by_id: Mapping[int, Deck]) -> str:

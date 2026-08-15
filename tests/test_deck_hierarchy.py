@@ -1,127 +1,183 @@
 import asyncio
-from types import SimpleNamespace
 
-from bot.handlers import import_cards
-from bot.models import Deck, User
-from bot.services import decks
-from bot.services.apkg_importer import ImportedCard, ImportedNote
+from sqlalchemy import func, select
 
-
-class _SessionContext:
-    async def __aenter__(self):
-        return SimpleNamespace()
-
-    async def __aexit__(self, exc_type, exc_value, traceback):
-        return None
+from bot.handlers.import_cards import _get_cached_deck
+from bot.models import Card, Deck, Note, User
+from bot.services.cards import create_note_with_cards, note_exists
+from bot.services.decks import create_deck, deck_full_path, get_or_create_deck, resolve_apkg_deck
 
 
-class _State:
-    async def get_data(self) -> dict[str, str]:
-        return {"deck_id": "auto"}
-
-    async def clear(self) -> None:
-        return None
-
-
-class _Message:
-    from_user = SimpleNamespace(id=1)
-
-    async def answer(self, text: str) -> None:
-        return None
+async def _create_user(session, telegram_id: int = 1) -> User:
+    user = User(telegram_id=telegram_id, timezone="UTC")
+    session.add(user)
+    await session.commit()
+    await session.refresh(user)
+    return user
 
 
-def _deck_resolver(monkeypatch):
-    created: dict[str, Deck] = {}
-    user = User(id=1, telegram_id=1, timezone="UTC")
-
-    async def find_deck(session, found_user, name: str):
-        return created.get(name)
-
-    async def get_or_create(session, found_user, name: str, description=None, parent=None):
-        deck = created.get(name)
-        if deck is None:
-            deck = Deck(
-                id=len(created) + 1,
-                user_id=found_user.id,
-                parent_id=parent.id if parent is not None else None,
-                name=name,
-                description=description,
+def test_apkg_hierarchy_places_notes_and_cards_in_leaf(session_factory) -> None:
+    async def verify() -> None:
+        async with session_factory() as session:
+            user = await _create_user(session)
+            leaf = await _get_cached_deck(session, user, {}, "A::B::C")
+            note = await create_note_with_cards(
+                session=session,
+                user=user,
+                deck=leaf,
+                front="Question",
+                back="Answer",
+                tags=[],
+                note_type="basic",
+                anki_model_id=None,
+                fields=None,
+                source="apkg",
+                card_specs=[{"deck": leaf, "direction": "front_back"}],
             )
-            created[name] = deck
-        return deck
 
-    monkeypatch.setattr(decks, "_get_deck_by_name", find_deck)
-    monkeypatch.setattr(decks, "get_or_create_deck", get_or_create)
-    return user, created
+            decks = list(
+                (await session.execute(select(Deck).order_by(Deck.id.asc()))).scalars()
+            )
+            card = (await session.execute(select(Card))).scalar_one()
 
+            assert [deck.name for deck in decks] == ["A", "B", "C"]
+            assert decks[0].parent_id is None
+            assert decks[1].parent_id == decks[0].id
+            assert decks[2].parent_id == decks[1].id
+            assert note.deck_id == decks[2].id
+            assert card.deck_id == decks[2].id
 
-def test_resolve_apkg_deck_creates_and_reuses_hierarchy(monkeypatch) -> None:
-    user, created = _deck_resolver(monkeypatch)
-
-    leaf = asyncio.run(decks.resolve_apkg_deck(SimpleNamespace(), user, "A::B::C"))
-    repeated_leaf = asyncio.run(decks.resolve_apkg_deck(SimpleNamespace(), user, "A::B::C"))
-
-    assert list(created) == ["A", "B", "C"]
-    assert created["A"].parent_id is None
-    assert created["B"].parent_id == created["A"].id
-    assert created["C"].parent_id == created["B"].id
-    assert leaf is created["C"]
-    assert repeated_leaf is created["C"]
+    asyncio.run(verify())
 
 
-def test_resolve_apkg_deck_uses_existing_flat_deck(monkeypatch) -> None:
-    user, created = _deck_resolver(monkeypatch)
-    flat_deck = Deck(id=1, user_id=user.id, name="A::B::C")
-    created[flat_deck.name] = flat_deck
+def test_same_leaf_name_is_scoped_to_parent(session_factory) -> None:
+    async def verify() -> None:
+        async with session_factory() as session:
+            user = await _create_user(session)
+            spanish_leaf = await resolve_apkg_deck(session, user, "Spanish::Vocabulary")
+            french_leaf = await resolve_apkg_deck(session, user, "French::Vocabulary")
 
-    resolved = asyncio.run(decks.resolve_apkg_deck(SimpleNamespace(), user, flat_deck.name))
+            spanish_note = await create_note_with_cards(
+                session=session,
+                user=user,
+                deck=spanish_leaf,
+                front="Hola",
+                back="Hello",
+                tags=[],
+                note_type="basic",
+                anki_model_id=None,
+                fields=None,
+                source="apkg",
+                card_specs=[{"deck": spanish_leaf, "direction": "front_back"}],
+            )
+            french_note = await create_note_with_cards(
+                session=session,
+                user=user,
+                deck=french_leaf,
+                front="Bonjour",
+                back="Hello",
+                tags=[],
+                note_type="basic",
+                anki_model_id=None,
+                fields=None,
+                source="apkg",
+                card_specs=[{"deck": french_leaf, "direction": "front_back"}],
+            )
 
-    assert resolved is flat_deck
-    assert list(created) == ["A::B::C"]
+            assert spanish_leaf.id != french_leaf.id
+            assert spanish_leaf.name == french_leaf.name == "Vocabulary"
+            assert spanish_leaf.parent_id != french_leaf.parent_id
+            assert spanish_note.deck_id == spanish_leaf.id
+            assert french_note.deck_id == french_leaf.id
 
-
-def test_auto_import_places_notes_in_hierarchy_leaf_and_skips_repeat(monkeypatch) -> None:
-    user, created = _deck_resolver(monkeypatch)
-    imported_decks: list[Deck] = []
-    imported_cards: list[Deck] = []
-
-    async def resolve(session, found_user, name: str, description=None):
-        return await decks.resolve_apkg_deck(session, found_user, name, description)
-
-    async def note_exists(session, found_user, deck, front: str, back: str) -> bool:
-        return deck in imported_decks
-
-    async def create_note_with_cards(*, deck, card_specs, **kwargs) -> None:
-        imported_decks.append(deck)
-        imported_cards.extend(spec["deck"] for spec in card_specs)
-
-    monkeypatch.setattr(import_cards, "async_session", _SessionContext)
-    monkeypatch.setattr(import_cards, "get_or_create_user", lambda session, tg_user: _async_value(user))
-    monkeypatch.setattr(import_cards, "resolve_apkg_deck", resolve)
-    monkeypatch.setattr(import_cards, "note_exists", note_exists)
-    monkeypatch.setattr(import_cards, "create_note_with_cards", create_note_with_cards)
-
-    note = ImportedNote(
-        front="Question",
-        back="Answer",
-        tags=[],
-        note_type="basic",
-        anki_model_id=None,
-        fields={},
-        deck_name="A::B::C",
-        cards=[ImportedCard(front="Question", back="Answer", tags=[], deck_name="A::B::C")],
-    )
-
-    asyncio.run(import_cards._import_notes(_Message(), _State(), [note], "apkg", []))
-    asyncio.run(import_cards._import_notes(_Message(), _State(), [note], "apkg", []))
-
-    assert list(created) == ["A", "B", "C"]
-    assert imported_decks == [created["C"]]
-    assert imported_cards == [created["C"]]
+    asyncio.run(verify())
 
 
-async def _async_value(value):
-    return value
+def test_repeat_import_reuses_hierarchy_and_skips_duplicate_note(session_factory) -> None:
+    async def verify() -> None:
+        async with session_factory() as session:
+            user = await _create_user(session)
+            first_leaf = await resolve_apkg_deck(session, user, "A::B::C")
+            assert not await note_exists(session, user, first_leaf, "Question", "Answer")
+            await create_note_with_cards(
+                session=session,
+                user=user,
+                deck=first_leaf,
+                front="Question",
+                back="Answer",
+                tags=[],
+                note_type="basic",
+                anki_model_id=None,
+                fields=None,
+                source="apkg",
+                card_specs=[{"deck": first_leaf, "direction": "front_back"}],
+            )
+
+            repeated_leaf = await resolve_apkg_deck(session, user, "A::B::C")
+            assert repeated_leaf.id == first_leaf.id
+            assert await note_exists(session, user, repeated_leaf, "Question", "Answer")
+            assert (await session.execute(select(func.count(Deck.id)))).scalar_one() == 3
+            assert (await session.execute(select(func.count(Note.id)))).scalar_one() == 1
+
+    asyncio.run(verify())
+
+
+def test_existing_flat_deck_is_reused(session_factory) -> None:
+    async def verify() -> None:
+        async with session_factory() as session:
+            user = await _create_user(session)
+            flat_deck = await create_deck(session, user, "A::B::C")
+
+            resolved = await resolve_apkg_deck(session, user, "A::B::C")
+
+            assert resolved.id == flat_deck.id
+            assert (await session.execute(select(func.count(Deck.id)))).scalar_one() == 1
+
+    asyncio.run(verify())
+
+
+def test_root_leaf_name_does_not_intercept_nested_import(session_factory) -> None:
+    async def verify() -> None:
+        async with session_factory() as session:
+            user = await _create_user(session)
+            root_vocabulary = await create_deck(session, user, "Vocabulary")
+
+            nested_vocabulary = await resolve_apkg_deck(session, user, "Spanish::Vocabulary")
+
+            assert nested_vocabulary.id != root_vocabulary.id
+            assert nested_vocabulary.name == root_vocabulary.name == "Vocabulary"
+            assert nested_vocabulary.parent_id is not None
+
+    asyncio.run(verify())
+
+
+def test_root_deck_lookup_ignores_nested_deck_with_same_name(session_factory) -> None:
+    async def verify() -> None:
+        async with session_factory() as session:
+            user = await _create_user(session)
+            nested_vocabulary = await resolve_apkg_deck(session, user, "Spanish::Vocabulary")
+
+            root_vocabulary = await get_or_create_deck(session, user, "Vocabulary")
+
+            assert root_vocabulary.id != nested_vocabulary.id
+            assert root_vocabulary.parent_id is None
+
+    asyncio.run(verify())
+
+
+def test_only_leaf_receives_import_description(session_factory) -> None:
+    async def verify() -> None:
+        async with session_factory() as session:
+            user = await _create_user(session)
+            leaf = await resolve_apkg_deck(session, user, "A::B::C", "Imported from APKG")
+            decks = list(
+                (await session.execute(select(Deck).order_by(Deck.id.asc()))).scalars()
+            )
+
+            assert [deck.description for deck in decks] == [None, None, "Imported from APKG"]
+            assert leaf.id == decks[-1].id
+
+    asyncio.run(verify())
 
 
 def test_deck_full_path_uses_parent_chain() -> None:
@@ -129,4 +185,4 @@ def test_deck_full_path_uses_parent_chain() -> None:
     middle = Deck(id=2, user_id=1, parent_id=root.id, name="B")
     leaf = Deck(id=3, user_id=1, parent_id=middle.id, name="C")
 
-    assert decks.deck_full_path(leaf, {root.id: root, middle.id: middle, leaf.id: leaf}) == "A::B::C"
+    assert deck_full_path(leaf, {root.id: root, middle.id: middle, leaf.id: leaf}) == "A::B::C"

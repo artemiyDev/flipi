@@ -7,6 +7,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     LargeBinary,
     SmallInteger,
@@ -14,6 +15,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -41,7 +43,17 @@ class User(Base):
 
 class Deck(Base):
     __tablename__ = "decks"
-    __table_args__ = (UniqueConstraint("user_id", "name", name="uq_decks_user_name"),)
+    __table_args__ = (
+        UniqueConstraint("user_id", "parent_id", "name", name="uq_decks_user_parent_name"),
+        Index(
+            "uq_decks_user_root_name",
+            "user_id",
+            "name",
+            unique=True,
+            postgresql_where=text("parent_id IS NULL"),
+            sqlite_where=text("parent_id IS NULL"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
