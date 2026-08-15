@@ -31,3 +31,30 @@ nav .active { color: var(--tg-button-color); }
 .ratings button { padding: 10px 4px; border-radius: 8px; }
 .ratings small { display: block; margin-top: 4px; color: var(--tg-hint-color); }
 .done { min-height: 80vh; display: grid; place-content: center; gap: 16px; text-align: center; }
+.stats { max-width: 640px; margin: 0 auto; }
+.stats-block { padding: 16px 0; border-bottom: 1px solid var(--tg-hint-color); }
+.stats-block h2 { margin: 0 0 12px; font-size: 17px; }
+.stats-summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.stats-summary div { min-width: 0; }
+.stats-summary strong, .retention { display: block; font-size: 28px; font-variant-numeric: tabular-nums; }
+.stats-summary span { display: block; color: var(--tg-hint-color); font-size: 12px; }
+.heatmap-scroll { overflow-x: auto; padding-bottom: 4px; }
+.heatmap { display: grid; grid-template-columns: repeat(26, 10px); grid-template-rows: repeat(7, 10px); gap: 2px; width: max-content; }
+.heatmap-cell { width: 10px; height: 10px; border-radius: 2px; background: var(--tg-secondary-bg-color); }
+.heatmap-level-1 { background: color-mix(in srgb, var(--tg-button-color) 25%, var(--tg-secondary-bg-color)); }
+.heatmap-level-2 { background: color-mix(in srgb, var(--tg-button-color) 50%, var(--tg-secondary-bg-color)); }
+.heatmap-level-3 { background: color-mix(in srgb, var(--tg-button-color) 75%, var(--tg-secondary-bg-color)); }
+.heatmap-level-4 { background: var(--tg-button-color); }
+.forecast { display: block; width: 100%; height: 140px; overflow: visible; }
+.forecast-overdue { fill: #e8a33d; }
+.forecast-future { fill: var(--tg-button-color); }
+.forecast-label, .forecast-maximum { fill: var(--tg-hint-color); font-size: 8px; }
+.rating-breakdown { display: grid; gap: 8px; margin-top: 14px; }
+.rating-row { display: grid; grid-template-columns: 58px 1fr 30px; align-items: center; gap: 8px; font-size: 13px; }
+.rating-row b { font-variant-numeric: tabular-nums; text-align: right; }
+.rating-track { height: 8px; border-radius: 4px; overflow: hidden; background: var(--tg-secondary-bg-color); }
+.rating-track i { display: block; height: 100%; border-radius: inherit; }
+.rating-again { background: #e8574d; }
+.rating-hard { background: #e8a33d; }
+.rating-good { background: #4caf50; }
+.rating-easy { background: #2481cc; }

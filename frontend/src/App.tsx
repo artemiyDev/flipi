@@ -1,4 +1,4 @@
-import {useEffect, useRef, useState} from "react";
+import {useCallback, useEffect, useRef, useState} from "react";
 
 import {
   ApiError,
@@ -11,6 +11,7 @@ import {
   type StudyCard,
 } from "./api";
 import {hydrateCardMedia, releaseCardMedia} from "./media";
+import {Stats} from "./Stats";
 
 type Tab = "study" | "stats";
 
@@ -149,6 +150,7 @@ export function App(): JSX.Element {
   const [tab, setTab] = useState<Tab>("study");
   const [deckId, setDeckId] = useState<number | "all" | null>(null);
   const [unauthorized, setUnauthorized] = useState(false);
+  const showUnauthorized = useCallback(() => setUnauthorized(true), []);
 
   if (unauthorized) {
     return <main className="hint centered">Откройте приложение из Telegram</main>;
@@ -157,7 +159,7 @@ export function App(): JSX.Element {
     return <main><Session deckId={deckId} onClose={() => setDeckId(null)} onUnauthorized={() => setUnauthorized(true)} /></main>;
   }
   return <main>
-    {tab === "study" ? <Decks onStudy={setDeckId} onUnauthorized={() => setUnauthorized(true)} /> : <p className="hint centered">Скоро</p>}
+    {tab === "study" ? <Decks onStudy={setDeckId} onUnauthorized={showUnauthorized} /> : <Stats onUnauthorized={showUnauthorized} />}
     <nav><button className={tab === "study" ? "active" : ""} onClick={() => setTab("study")}>Учить</button><button className={tab === "stats" ? "active" : ""} onClick={() => setTab("stats")}>Статистика</button></nav>
   </main>;
 }

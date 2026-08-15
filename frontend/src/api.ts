@@ -18,6 +18,28 @@ export interface Media {
   content_type: string | null;
 }
 
+export interface StatsOverview {
+  due_now: number;
+  done_today: number;
+  streak_days: number;
+  retention_30d: number | null;
+  ratings_30d: Record<"again" | "hard" | "good" | "easy", number>;
+}
+
+export interface StatsDay {
+  date: string;
+  count: number;
+}
+
+export interface StatsHeatmap {
+  days: StatsDay[];
+}
+
+export interface StatsForecast {
+  overdue: number;
+  days: StatsDay[];
+}
+
 export interface StudyCard {
   card_id: number;
   deck_id: number;
@@ -66,6 +88,18 @@ export function fetchDecks(): Promise<Deck[]> {
 
 export function fetchNextCard(deckId: number | "all"): Promise<NextCard> {
   return request<NextCard>(`/study/next?deck_id=${deckId}`);
+}
+
+export function fetchStatsOverview(): Promise<StatsOverview> {
+  return request<StatsOverview>("/stats/overview");
+}
+
+export function fetchStatsHeatmap(): Promise<StatsHeatmap> {
+  return request<StatsHeatmap>("/stats/heatmap?weeks=26");
+}
+
+export function fetchStatsForecast(): Promise<StatsForecast> {
+  return request<StatsForecast>("/stats/forecast?days=30");
 }
 
 export function submitAnswer(
