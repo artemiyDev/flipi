@@ -84,6 +84,10 @@ docker compose up --build
 The bot container runs `alembic upgrade head` before starting polling, so the
 schema is always current.
 
+The Mini App API runs as the `api` service on `127.0.0.1:8094` by default.
+Set `FLIPI_API_PORT` to use another local port. It validates Telegram WebApp
+`initData` on every `/api` request.
+
 ### Configuration
 
 | Variable | Default | Purpose |
@@ -91,6 +95,7 @@ schema is always current.
 | `BOT_TOKEN` | — | Telegram bot token. Required. |
 | `DATABASE_URL` | `postgresql+asyncpg://ankibot:ankibot@db:5432/ankibot` | database connection |
 | `LOG_LEVEL` | `INFO` | logging level |
+| `AUTH_MAX_AGE_SECONDS` | `86400` | maximum age of Telegram WebApp initData in seconds |
 | `AUTO_CREATE_TABLES` | `false` | build tables from models instead of migrations — local experiments only, never in production |
 
 ### Commands

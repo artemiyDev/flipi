@@ -1,9 +1,16 @@
-from aiogram.types import User as TelegramUser
+from typing import Protocol
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.models import User
 from bot.services.timezones import normalize_timezone
+
+
+class TelegramUser(Protocol):
+    id: int
+    username: str | None
+    full_name: str | None
+    language_code: str | None
 
 
 async def get_or_create_user(session: AsyncSession, tg_user: TelegramUser) -> User:
