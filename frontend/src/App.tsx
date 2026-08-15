@@ -13,6 +13,7 @@ import {
 import {hydrateCardMedia, releaseCardMedia} from "./media";
 import {DeckScreen, Decks} from "./Decks";
 import {CardCreateScreen, CardScreen, CardsBrowser} from "./Cards";
+import {ImportScreen} from "./Import";
 import {Stats} from "./Stats";
 
 type Tab = "study" | "decks" | "stats";
@@ -157,6 +158,7 @@ export function App(): JSX.Element {
   const [cardCreateDeckId, setCardCreateDeckId] = useState<number | null>(null);
   const [cardBrowserQuery, setCardBrowserQuery] = useState<string | null>(null);
   const [openedCardId, setOpenedCardId] = useState<number | null>(null);
+  const [importDeckId, setImportDeckId] = useState<number | null>(null);
   const [createRequest, setCreateRequest] = useState(0);
   const [unauthorized, setUnauthorized] = useState(false);
   const showUnauthorized = useCallback(() => setUnauthorized(true), []);
@@ -176,8 +178,11 @@ export function App(): JSX.Element {
   if (cardBrowserQuery !== null) {
     return <main><CardsBrowser initialQuery={cardBrowserQuery} onClose={() => setCardBrowserQuery(null)} onOpenCard={setOpenedCardId} onUnauthorized={showUnauthorized} /></main>;
   }
+  if (importDeckId !== null) {
+    return <main><ImportScreen initialDeckId={importDeckId} onClose={() => { setImportDeckId(null); setOpenedDeckId(null); }} onUnauthorized={showUnauthorized} /></main>;
+  }
   if (openedDeckId !== null) {
-    return <main><DeckScreen deckId={openedDeckId} onAddCard={setCardCreateDeckId} onBack={() => setOpenedDeckId(null)} onBrowseCards={setCardBrowserQuery} onUnauthorized={showUnauthorized} /></main>;
+    return <main><DeckScreen deckId={openedDeckId} onAddCard={setCardCreateDeckId} onBack={() => setOpenedDeckId(null)} onBrowseCards={setCardBrowserQuery} onImport={setImportDeckId} onUnauthorized={showUnauthorized} /></main>;
   }
   const openDeckCreation = () => {
     setTab("decks");
@@ -185,7 +190,7 @@ export function App(): JSX.Element {
   };
   return <main>
     {tab === "study" && <StudyDecks onCreateDeck={openDeckCreation} onStudy={setStudyDeckId} onUnauthorized={showUnauthorized} />}
-    {tab === "decks" && <Decks createRequest={createRequest} onBrowseCards={() => setCardBrowserQuery("")} onOpenDeck={setOpenedDeckId} onUnauthorized={showUnauthorized} />}
+    {tab === "decks" && <Decks createRequest={createRequest} onBrowseCards={() => setCardBrowserQuery("")} onImport={() => setImportDeckId(0)} onOpenDeck={setOpenedDeckId} onUnauthorized={showUnauthorized} />}
     {tab === "stats" && <Stats onUnauthorized={showUnauthorized} />}
     <nav><button className={tab === "study" ? "active" : ""} onClick={() => setTab("study")}>Учить</button><button className={tab === "decks" ? "active" : ""} onClick={() => setTab("decks")}>Колоды</button><button className={tab === "stats" ? "active" : ""} onClick={() => setTab("stats")}>Статистика</button></nav>
   </main>;

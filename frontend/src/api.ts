@@ -123,6 +123,14 @@ export interface CardDetail {
   flag: CardFlag | null;
 }
 
+export interface ImportResult {
+  added: number;
+  updated: number;
+  unchanged: number;
+  decks_created: string[];
+  media_saved: number;
+}
+
 export type NextCard = StudyCard | StudyDone;
 
 export class ApiError extends Error {
@@ -138,7 +146,7 @@ function telegramInitData(): string {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   headers.set("X-Telegram-Init-Data", telegramInitData());
-  if (init?.body) {
+  if (init?.body && !(init.body instanceof FormData)) {
     headers.set("Content-Type", "application/json");
   }
 
@@ -160,6 +168,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export function fetchDecks(): Promise<Deck[]> {
   return request<Deck[]>("/decks");
+}
+
+export function importFile(file: File, deckId: number | "auto"): Promise<ImportResult> {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("deck_id", String(deckId));
+  return request<ImportResult>("/import", {method: "POST", body: formData});
 }
 
 export function createCard(payload: {deck_id: number; front: string; back: string; tags?: string[]; reverse: boolean}): Promise<{note_id: number}> {

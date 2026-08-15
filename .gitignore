@@ -17,3 +17,4 @@ downloads/
 AGENTS.md
 tasks/
 node_modules/
+*.tsbuildinfo

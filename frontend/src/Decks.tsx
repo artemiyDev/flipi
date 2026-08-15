@@ -166,11 +166,12 @@ function CreateDeckForm({onCreated, onClose, onUnauthorized}: {
   </form>;
 }
 
-export function Decks({onOpenDeck, onUnauthorized, createRequest, onBrowseCards = () => undefined}: {
+export function Decks({onOpenDeck, onUnauthorized, createRequest, onBrowseCards = () => undefined, onImport = () => undefined}: {
   onOpenDeck: (id: number) => void;
   onUnauthorized: () => void;
   createRequest: number;
   onBrowseCards?: () => void;
+  onImport?: () => void;
 }): JSX.Element {
   const [decks, setDecks] = useState<Deck[] | null>(null);
   const [archived, setArchived] = useState<ArchivedDeck[] | null>(null);
@@ -217,7 +218,7 @@ export function Decks({onOpenDeck, onUnauthorized, createRequest, onBrowseCards 
   }
 
   return <section className="decks-management">
-    <div className="deck-actions"><button className="primary" onClick={() => setCreateOpen(true)}>Новая колода</button><button onClick={onBrowseCards}>Поиск карточек</button></div>
+    <div className="deck-actions"><button className="primary" onClick={() => setCreateOpen(true)}>Новая колода</button><button onClick={onBrowseCards}>Поиск карточек</button><button onClick={onImport}>Импорт</button></div>
     {createOpen && <CreateDeckForm onClose={() => setCreateOpen(false)} onCreated={load} onUnauthorized={onUnauthorized} />}
     {decks.length === 0 ? <p className="hint">Пока нет колод</p> : <div className="deck-list">
       {decks.map((deck) => <button className="deck" key={deck.id} onClick={() => onOpenDeck(deck.id)}>
@@ -248,12 +249,13 @@ function SettingInput({label, field, values, setValues, errors, type = "number"}
   </label>;
 }
 
-export function DeckScreen({deckId, onBack, onUnauthorized, onAddCard = () => undefined, onBrowseCards = () => undefined}: {
+export function DeckScreen({deckId, onBack, onUnauthorized, onAddCard = () => undefined, onBrowseCards = () => undefined, onImport = () => undefined}: {
   deckId: number;
   onBack: () => void;
   onUnauthorized: () => void;
   onAddCard?: (deckId: number) => void;
   onBrowseCards?: (query: string) => void;
+  onImport?: (deckId: number) => void;
 }): JSX.Element {
   const [deck, setDeck] = useState<DeckDetail | null>(null);
   const [renameOpen, setRenameOpen] = useState(false);
@@ -368,7 +370,7 @@ export function DeckScreen({deckId, onBack, onUnauthorized, onAddCard = () => un
       {nameError && <p className="field-error" role="alert">{nameError}</p>}
     </div><ProgressCounts counts={deck.counts} /></header>
     {!renameOpen && <button onClick={() => setRenameOpen(true)}>Переименовать</button>}
-    <div className="deck-actions"><button className="primary" onClick={() => onAddCard(deck.id)}>Добавить карточку</button><button onClick={() => onBrowseCards(`deck:\"${deck.name}\"`)}>Карточки</button></div>
+    <div className="deck-actions"><button className="primary" onClick={() => onAddCard(deck.id)}>Добавить карточку</button><button onClick={() => onBrowseCards(`deck:\"${deck.name}\"`)}>Карточки</button><button onClick={() => onImport(deck.id)}>Импортировать файл</button></div>
 
     <section className="settings-block"><h2>Пресет</h2><div className="presets">
       {PRESETS.map(([key, label]) => <button className={deck.settings.option_preset === key ? "active" : ""} key={key} onClick={() => applyPreset(key)}>{label}</button>)}
