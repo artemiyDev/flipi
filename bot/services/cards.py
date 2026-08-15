@@ -3,7 +3,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -629,10 +629,27 @@ async def search_notes(session: AsyncSession, user: User, query: str, limit: int
 
 
 async def search_cards(session: AsyncSession, user: User, query: str, limit: int = 20) -> list[Card]:
+    _, cards = await search_cards_page(session, user, query, limit=limit)
+    return cards
+
+
+async def search_cards_page(
+    session: AsyncSession,
+    user: User,
+    query: str,
+    limit: int = 20,
+    offset: int = 0,
+) -> tuple[int, list[Card]]:
     now = datetime.now(UTC)
     today = user_today(user.timezone)
-    filters = _build_card_query_filters(user, query, now, today)
+    filters = _build_card_query_filters(user, query, now, today, session.bind.dialect.name)
 
+    count_result = await session.execute(
+        select(func.count(Card.id))
+        .join(Card.note)
+        .join(Card.deck)
+        .where(*filters)
+    )
     result = await session.execute(
         select(Card)
         .join(Card.note)
@@ -640,9 +657,10 @@ async def search_cards(session: AsyncSession, user: User, query: str, limit: int
         .where(*filters)
         .options(selectinload(Card.note), selectinload(Card.deck))
         .order_by(Card.due_at.asc(), Card.id.asc())
+        .offset(offset)
         .limit(limit)
     )
-    return list(result.scalars())
+    return int(count_result.scalar_one()), list(result.scalars())
 
 
 async def get_next_due_card_by_query(
@@ -652,7 +670,7 @@ async def get_next_due_card_by_query(
 ) -> Card | None:
     now = datetime.now(UTC)
     today = user_today(user.timezone)
-    base_filters = _build_card_query_filters(user, query, now, today)
+    base_filters = _build_card_query_filters(user, query, now, today, session.bind.dialect.name)
     base_filters.extend(
         [
             Deck.is_archived.is_(False),
@@ -690,7 +708,7 @@ async def get_next_due_card_by_query(
 async def count_cards_by_query(session: AsyncSession, user: User, query: str) -> int:
     now = datetime.now(UTC)
     today = user_today(user.timezone)
-    filters = _build_card_query_filters(user, query, now, today)
+    filters = _build_card_query_filters(user, query, now, today, session.bind.dialect.name)
     result = await session.execute(
         select(func.count(Card.id))
         .join(Card.note)
@@ -703,7 +721,7 @@ async def count_cards_by_query(session: AsyncSession, user: User, query: str) ->
 async def count_due_cards_by_query(session: AsyncSession, user: User, query: str) -> int:
     now = datetime.now(UTC)
     today = user_today(user.timezone)
-    filters = _build_card_query_filters(user, query, now, today)
+    filters = _build_card_query_filters(user, query, now, today, session.bind.dialect.name)
     filters.extend(
         [
             Card.suspended.is_(False),
@@ -720,12 +738,24 @@ async def count_due_cards_by_query(session: AsyncSession, user: User, query: str
     return int(result.scalar_one())
 
 
-def _build_card_query_filters(user: User, query: str, now: datetime, today: date) -> list:
+def _build_card_query_filters(
+    user: User,
+    query: str,
+    now: datetime,
+    today: date,
+    dialect_name: str,
+) -> list:
     filters = [Card.user_id == user.id, Deck.is_archived.is_(False)]
     parsed = parse_browser_query(query)
 
     for tag in parsed.tags:
-        filters.append(Note.tags.contains([tag]))
+        if dialect_name == "sqlite":
+            tag_values = func.json_each(Note.tags).table_valued("value")
+            filters.append(
+                select(1).select_from(tag_values).where(tag_values.c.value == tag).exists()
+            )
+        else:
+            filters.append(Note.tags.contains([tag]))
     for state in parsed.states:
         filters.append(Card.state == state)
     for flag in parsed.flags:
@@ -811,6 +841,26 @@ async def update_note_field(
     await session.commit()
 
 
+async def update_note(
+    session: AsyncSession,
+    note: Note,
+    *,
+    front: str | None = None,
+    back: str | None = None,
+    fields: dict[str, str] | None = None,
+    tags: list[str] | None = None,
+) -> None:
+    if fields is not None:
+        note.fields = fields
+    if front is not None:
+        sync_note_fields_for_edit(note, "front", front)
+    if back is not None:
+        sync_note_fields_for_edit(note, "back", back)
+    if tags is not None:
+        note.tags = tags
+    await session.commit()
+
+
 def sync_note_fields_for_edit(note: Note, field: str, value: str) -> None:
     if field == "front":
         note.front = value.strip()
@@ -834,6 +884,7 @@ def _update_ordered_note_field(note: Note, index: int, value: str) -> None:
 
 
 async def delete_note(session: AsyncSession, note: Note) -> None:
+    await session.execute(delete(Card).where(Card.note_id == note.id))
     await session.delete(note)
     await session.commit()
 
@@ -877,6 +928,11 @@ async def set_card_due_in_days(session: AsyncSession, card: Card, days: int) -> 
     card.buried_until = None
     card.suspended = False
     await session.commit()
+
+
+async def set_card_due_date(session: AsyncSession, card: Card, due_date: date) -> None:
+    today = datetime.now(UTC).date()
+    await set_card_due_in_days(session, card, max((due_date - today).days, 0))
 
 
 async def reset_card(session: AsyncSession, card: Card) -> None:

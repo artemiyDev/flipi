@@ -1,14 +1,31 @@
-from typing import Annotated
+from datetime import date
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.deps import get_current_user, get_db_session
 from bot.models import User
-from bot.services.cards import card_answer_html, card_question_html, get_card, get_next_due_card
+from bot.services.cards import (
+    bury_card_until_tomorrow,
+    card_answer_html,
+    card_question,
+    card_question_html,
+    create_basic_note,
+    delete_note,
+    get_card,
+    get_next_due_card,
+    get_note,
+    reset_card,
+    search_cards_page,
+    set_card_due_date,
+    set_card_flag,
+    set_card_suspended,
+    update_note,
+)
 from bot.services.decks import (
     DECK_OPTION_PRESETS,
     DeckNameConflictError,
@@ -83,6 +100,60 @@ class DeckPresetRequest(BaseModel):
     name: str
 
 
+class CardCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    deck_id: int
+    front: str
+    back: str
+    tags: list[str] | None = None
+    reverse: bool = False
+
+    @field_validator("front", "back")
+    @classmethod
+    def validate_content(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Card content must not be empty")
+        return value
+
+
+class NotePatchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    front: str | None = None
+    back: str | None = None
+    fields: dict[str, str] | None = None
+    tags: list[str] | None = None
+
+    @model_validator(mode="after")
+    def require_update(self):
+        if not self.model_fields_set:
+            raise ValueError("At least one note field is required")
+        if self.front is not None and not self.front.strip():
+            raise ValueError("Front must not be empty")
+        if self.back is not None and not self.back.strip():
+            raise ValueError("Back must not be empty")
+        return self
+
+
+class CardSuspendedRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    value: bool
+
+
+class CardFlagRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    color: Literal["red", "orange", "green", "blue", "purple"] | None
+
+
+class CardDueRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    date: date
+
+
 async def deck_detail(session: AsyncSession, user: User, deck) -> dict:
     decks_by_id = {item.id: item for item in await list_all_user_decks(session, user)}
     new_count, learning_count, review_count = await get_deck_counts(session, deck)
@@ -115,6 +186,184 @@ async def api_deck_or_404(session: AsyncSession, user: User, deck_id: int):
     if deck is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deck not found")
     return deck
+
+
+async def card_response(session: AsyncSession, user: User, card) -> dict:
+    decks_by_id = {deck.id: deck for deck in await list_all_user_decks(session, user)}
+    return {
+        "card_id": card.id,
+        "note_id": card.note_id,
+        "deck_id": card.deck_id,
+        "deck_name": deck_full_path(card.deck, decks_by_id),
+        "question_html": sanitize_card_html(card_question_html(card)),
+        "answer_html": sanitize_card_html(card_answer_html(card)),
+        "fields": card.note.fields or {},
+        "front": card.note.front,
+        "back": card.note.back,
+        "tags": card.note.tags,
+        "state": card.state,
+        "due": card.due_at.isoformat(),
+        "lapses": card.lapses,
+        "suspended": card.suspended,
+        "buried_until": card.buried_until.isoformat() if card.buried_until else None,
+        "flag": card.flag,
+        "template_ord": card.template_ord,
+    }
+
+
+async def api_card_or_404(session: AsyncSession, user: User, card_id: int):
+    card = await get_card(session, user, card_id)
+    if card is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Card not found")
+    return card
+
+
+async def api_note_or_404(session: AsyncSession, user: User, note_id: int):
+    note = await get_note(session, user, note_id)
+    if note is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Note not found")
+    return note
+
+
+@router.post("/cards", status_code=status.HTTP_201_CREATED)
+async def create_card_endpoint(
+    payload: CardCreateRequest,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> dict:
+    deck = await get_deck(session, user, payload.deck_id)
+    if deck is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deck not found")
+    note = await create_basic_note(
+        session,
+        user,
+        deck,
+        payload.front,
+        payload.back,
+        tags=payload.tags,
+        create_reverse=payload.reverse,
+    )
+    return {"note_id": note.id}
+
+
+@router.get("/cards/search")
+async def search_cards_endpoint(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    user: Annotated[User, Depends(get_current_user)],
+    q: str = "",
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> dict:
+    total, cards = await search_cards_page(session, user, q, limit=limit, offset=offset)
+    decks_by_id = {deck.id: deck for deck in await list_all_user_decks(session, user)}
+    return {
+        "total": total,
+        "items": [
+            {
+                "card_id": card.id,
+                "note_id": card.note_id,
+                "deck_id": card.deck_id,
+                "deck_name": deck_full_path(card.deck, decks_by_id),
+                "preview": card_question(card)[:200],
+                "state": card.state,
+                "due": card.due_at.isoformat(),
+                "suspended": card.suspended,
+                "buried": card.buried_until is not None,
+                "flag": card.flag,
+            }
+            for card in cards
+        ],
+    }
+
+
+@router.get("/cards/{card_id}")
+async def card_details_endpoint(
+    card_id: int,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> dict:
+    return await card_response(session, user, await api_card_or_404(session, user, card_id))
+
+
+@router.patch("/notes/{note_id}")
+async def update_note_endpoint(
+    note_id: int,
+    payload: NotePatchRequest,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> dict:
+    note = await api_note_or_404(session, user, note_id)
+    values = payload.model_dump(exclude_unset=True)
+    await update_note(session, note, **values)
+    return {"ok": True}
+
+
+@router.delete("/notes/{note_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_note_endpoint(
+    note_id: int,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> Response:
+    await delete_note(session, await api_note_or_404(session, user, note_id))
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/cards/{card_id}/suspend")
+async def suspend_card_endpoint(
+    card_id: int,
+    payload: CardSuspendedRequest,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> dict:
+    card = await api_card_or_404(session, user, card_id)
+    await set_card_suspended(session, card, payload.value)
+    return {"ok": True}
+
+
+@router.post("/cards/{card_id}/bury")
+async def bury_card_endpoint(
+    card_id: int,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> dict:
+    card = await api_card_or_404(session, user, card_id)
+    await bury_card_until_tomorrow(session, card, user.timezone)
+    return {"ok": True}
+
+
+@router.post("/cards/{card_id}/flag")
+async def flag_card_endpoint(
+    card_id: int,
+    payload: CardFlagRequest,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> dict:
+    card = await api_card_or_404(session, user, card_id)
+    await set_card_flag(session, card, payload.color)
+    return {"ok": True}
+
+
+@router.post("/cards/{card_id}/reset")
+async def reset_card_endpoint(
+    card_id: int,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> dict:
+    card = await api_card_or_404(session, user, card_id)
+    await reset_card(session, card)
+    return {"ok": True}
+
+
+@router.post("/cards/{card_id}/due")
+async def set_card_due_endpoint(
+    card_id: int,
+    payload: CardDueRequest,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> dict:
+    card = await api_card_or_404(session, user, card_id)
+    await set_card_due_date(session, card, payload.date)
+    return {"ok": True}
 
 
 @router.get("/stats/overview")

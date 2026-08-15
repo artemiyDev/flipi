@@ -108,6 +108,19 @@ def patch_request(
     return asyncio.run(send())
 
 
+def delete_request(
+    app,
+    path: str,
+    headers: dict[str, str] | None = None,
+) -> httpx.Response:
+    async def send() -> httpx.Response:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            return await client.delete(path, headers=headers)
+
+    return asyncio.run(send())
+
+
 def test_api_rejects_missing_init_data(session_factory, monkeypatch) -> None:
     response = request(build_app(session_factory, monkeypatch), "/api/me")
 
@@ -500,3 +513,146 @@ def test_study_next_all_iterates_decks_then_reports_done_today(session_factory, 
     assert first["deck_name"] == "Alpha"
     assert second["deck_name"] == "Beta"
     assert done.json() == {"card_id": None, "done_today": 2}
+
+
+def test_cards_api_creates_reverse_cards_and_renders_sanitized_details(
+    session_factory, monkeypatch
+) -> None:
+    app = build_app(session_factory, monkeypatch)
+    headers = {"X-Telegram-Init-Data": signed_init_data()}
+    foreign_headers = {"X-Telegram-Init-Data": signed_init_data(telegram_id=987654)}
+    deck_id = post_request(app, "/api/decks", {"name": "Russian"}, headers).json()["id"]
+    foreign_deck_id = post_request(
+        app, "/api/decks", {"name": "Foreign"}, foreign_headers
+    ).json()["id"]
+
+    created = post_request(
+        app,
+        "/api/cards",
+        {
+            "deck_id": deck_id,
+            "front": "<b>слово</b><script>alert(1)</script>",
+            "back": "word",
+            "tags": ["language"],
+            "reverse": True,
+        },
+        headers,
+    )
+    cards = request(app, "/api/cards/search?q=слово", headers).json()
+    blank = post_request(
+        app, "/api/cards", {"deck_id": deck_id, "front": "  ", "back": "word"}, headers
+    )
+    foreign = post_request(
+        app,
+        "/api/cards",
+        {"deck_id": foreign_deck_id, "front": "word", "back": "слово"},
+        headers,
+    )
+    details = request(app, f"/api/cards/{cards['items'][0]['card_id']}", headers)
+
+    assert created.status_code == 201
+    assert created.json()["note_id"]
+    assert cards["total"] == 2
+    assert {item["note_id"] for item in cards["items"]} == {created.json()["note_id"]}
+    assert blank.status_code == 422
+    assert foreign.status_code == 404
+    assert details.status_code == 200
+    assert "<b>слово</b>" in details.json()["question_html"]
+    assert "script" not in details.json()["question_html"]
+
+
+def test_cards_api_search_actions_and_note_editing(session_factory, monkeypatch) -> None:
+    app = build_app(session_factory, monkeypatch)
+    headers = {"X-Telegram-Init-Data": signed_init_data()}
+    deck_id = post_request(app, "/api/decks", {"name": "Languages"}, headers).json()["id"]
+
+    first = post_request(
+        app,
+        "/api/cards",
+        {"deck_id": deck_id, "front": "unique-search-term", "back": "one", "tags": ["french"]},
+        headers,
+    )
+    post_request(
+        app,
+        "/api/cards",
+        {"deck_id": deck_id, "front": "second", "back": "two", "tags": ["spanish"]},
+        headers,
+    )
+    all_cards = request(app, "/api/cards/search", headers).json()
+    card_id = next(
+        item["card_id"] for item in all_cards["items"] if item["note_id"] == first.json()["note_id"]
+    )
+
+    tag_search = request(app, "/api/cards/search?q=tag:french", headers).json()
+    state_search = request(app, "/api/cards/search?q=state:new", headers).json()
+    deck_search = request(app, "/api/cards/search?q=deck:Languages", headers).json()
+    text_search = request(app, "/api/cards/search?q=unique-search-term", headers).json()
+    page = request(app, "/api/cards/search?limit=1&offset=1", headers).json()
+    suspended = post_request(app, f"/api/cards/{card_id}/suspend", {"value": True}, headers)
+    suspended_search = request(app, "/api/cards/search?q=is:suspended", headers).json()
+    unsuspended = post_request(app, f"/api/cards/{card_id}/suspend", {"value": False}, headers)
+    buried = post_request(app, f"/api/cards/{card_id}/bury", {}, headers)
+    buried_search = request(app, "/api/cards/search?q=is:buried", headers).json()
+    flagged = post_request(app, f"/api/cards/{card_id}/flag", {"color": "red"}, headers)
+    flag_search = request(app, "/api/cards/search?q=flag:red", headers).json()
+    due = post_request(app, f"/api/cards/{card_id}/due", {"date": "2030-01-01"}, headers)
+    after_due = request(app, f"/api/cards/{card_id}", headers).json()
+    reset = post_request(app, f"/api/cards/{card_id}/reset", {}, headers)
+    edited = patch_request(
+        app,
+        f"/api/notes/{first.json()['note_id']}",
+        {"front": "updated front", "tags": ["updated"], "fields": {"Front": "updated front"}},
+        headers,
+    )
+    details = request(app, f"/api/cards/{card_id}", headers).json()
+
+    assert tag_search["total"] == 1
+    assert state_search["total"] == 2
+    assert deck_search["total"] == 2
+    assert text_search["total"] == 1
+    assert page["total"] == 2
+    assert len(page["items"]) == 1
+    assert suspended.status_code == 200
+    assert suspended_search["total"] == 1
+    assert unsuspended.status_code == 200
+    assert buried.status_code == 200
+    assert buried_search["total"] == 1
+    assert flagged.status_code == 200
+    assert flag_search["total"] == 1
+    assert due.status_code == 200
+    assert after_due["state"] == "review"
+    assert after_due["due"].startswith("2030-01-01")
+    assert reset.status_code == 200
+    assert edited.status_code == 200
+    assert details["front"] == "updated front"
+    assert details["tags"] == ["updated"]
+    assert details["fields"] == {"Front": "updated front"}
+    assert details["state"] == "new"
+    assert details["suspended"] is False
+    assert details["buried_until"] is None
+
+
+def test_cards_api_deletes_notes_and_hides_foreign_notes(session_factory, monkeypatch) -> None:
+    app = build_app(session_factory, monkeypatch)
+    headers = {"X-Telegram-Init-Data": signed_init_data()}
+    foreign_headers = {"X-Telegram-Init-Data": signed_init_data(telegram_id=987654)}
+    deck_id = post_request(app, "/api/decks", {"name": "Delete"}, headers).json()["id"]
+    created = post_request(
+        app,
+        "/api/cards",
+        {"deck_id": deck_id, "front": "delete me", "back": "gone", "reverse": True},
+        headers,
+    )
+    cards = request(app, "/api/cards/search?q=delete", headers).json()
+    foreign_delete = delete_request(
+        app, f"/api/notes/{created.json()['note_id']}", foreign_headers
+    )
+    deleted = delete_request(app, f"/api/notes/{created.json()['note_id']}", headers)
+    remaining = request(app, "/api/cards/search?q=delete", headers).json()
+    missing = request(app, f"/api/cards/{cards['items'][0]['card_id']}", headers)
+
+    assert cards["total"] == 2
+    assert foreign_delete.status_code == 404
+    assert deleted.status_code == 204
+    assert remaining == {"total": 0, "items": []}
+    assert missing.status_code == 404
