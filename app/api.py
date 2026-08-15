@@ -1,7 +1,10 @@
 from datetime import date
+from pathlib import Path
+import sqlite3
 from typing import Annotated, Literal
+import zipfile
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
@@ -9,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.deps import get_current_user, get_db_session
 from bot.models import User
+from bot.services.apkg_importer import ImportedCard, parse_apkg_media, parse_apkg_notes
 from bot.services.cards import (
     bury_card_until_tomorrow,
     card_answer_html,
@@ -50,6 +54,8 @@ from bot.services.media import (
     get_media_files_by_names,
     replace_image_media_references,
 )
+from bot.services.import_flow import ImportFlowError, import_apkg_notes, import_text_cards
+from bot.services.importers import decode_text_payload, parse_text_cards
 from bot.services.scheduler import preview_intervals
 from bot.services.stats import forecast_due_counts, heatmap_review_counts, stats_overview
 from bot.services.study import (
@@ -60,6 +66,7 @@ from bot.services.study import (
 )
 
 router = APIRouter()
+MAX_IMPORT_BYTES = 20 * 1024 * 1024
 
 
 class StudyAnswerRequest(BaseModel):
@@ -223,6 +230,78 @@ async def api_note_or_404(session: AsyncSession, user: User, note_id: int):
     if note is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Note not found")
     return note
+
+
+@router.post("/import")
+async def import_file_endpoint(
+    file: Annotated[UploadFile, File()],
+    deck_id: Annotated[str, Form()],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> dict:
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix not in {".apkg", ".csv", ".tsv", ".txt"}:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Поддерживаются файлы APKG, CSV, TSV и TXT.",
+        )
+
+    payload = await file.read(MAX_IMPORT_BYTES + 1)
+    if len(payload) > MAX_IMPORT_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Файл слишком большой. Текущий лимит импорта: 20 MB.",
+        )
+
+    if deck_id == "auto":
+        if suffix != ".apkg":
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Автоматическое создание колод доступно только для APKG.",
+            )
+        target_deck_id = None
+    else:
+        try:
+            target_deck_id = int(deck_id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="deck_id должен быть целым числом или auto.",
+            ) from exc
+
+    try:
+        if suffix == ".apkg":
+            result = await import_apkg_notes(
+                session,
+                user,
+                target_deck_id,
+                parse_apkg_notes(payload),
+                parse_apkg_media(payload),
+                source="apkg",
+            )
+        else:
+            rows = [
+                ImportedCard(front=front, back=back, tags=tags, create_reverse=create_reverse)
+                for front, back, tags, create_reverse in parse_text_cards(decode_text_payload(payload))
+            ]
+            result = await import_text_cards(session, user, target_deck_id, rows, source="import")
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ImportFlowError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    except (sqlite3.Error, UnicodeDecodeError, ValueError, OSError, zipfile.BadZipFile) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Не удалось прочитать файл: {exc}",
+        ) from exc
+
+    return {
+        "added": result.added,
+        "updated": result.updated,
+        "unchanged": result.unchanged,
+        "decks_created": result.decks_created,
+        "media_saved": result.media_saved,
+    }
 
 
 @router.post("/cards", status_code=status.HTTP_201_CREATED)
