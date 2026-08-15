@@ -1,4 +1,4 @@
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 
@@ -15,6 +15,18 @@ def main_menu() -> InlineKeyboardMarkup:
     builder.button(text="Restore JSON", callback_data="backup:restore")
     builder.adjust(2, 2, 2, 2, 1)
     return builder.as_markup()
+
+
+def start_menu(web_app_url: str) -> InlineKeyboardMarkup:
+    menu = main_menu()
+    if not web_app_url:
+        return menu
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            *menu.inline_keyboard,
+            [InlineKeyboardButton(text="Открыть приложение", web_app=WebAppInfo(url=web_app_url))],
+        ]
+    )
 
 
 def back_to_menu() -> InlineKeyboardMarkup:

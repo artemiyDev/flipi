@@ -1,3 +1,14 @@
+FROM node:22-alpine AS frontend-build
+
+WORKDIR /frontend
+
+COPY frontend/package*.json ./
+RUN npm ci
+
+COPY frontend ./
+RUN npm run build
+
+
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -16,5 +27,6 @@ COPY bot ./bot
 COPY app ./app
 COPY migrations ./migrations
 COPY alembic.ini .
+COPY --from=frontend-build /frontend/dist ./frontend/dist
 
 CMD ["sh", "-c", "alembic upgrade head && python -m bot.main"]

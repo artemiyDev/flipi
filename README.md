@@ -88,6 +88,11 @@ The Mini App API runs as the `api` service on `127.0.0.1:8094` by default.
 Set `FLIPI_API_PORT` to use another local port. It validates Telegram WebApp
 `initData` on every `/api` request.
 
+### Frontend
+
+For local Mini App development, run `npm run dev` in `frontend/`; Vite proxies
+`/api` requests to `http://127.0.0.1:8094`. Run frontend tests with `npm test`.
+
 ### Configuration
 
 | Variable | Default | Purpose |
@@ -96,6 +101,7 @@ Set `FLIPI_API_PORT` to use another local port. It validates Telegram WebApp
 | `DATABASE_URL` | `postgresql+asyncpg://ankibot:ankibot@db:5432/ankibot` | database connection |
 | `LOG_LEVEL` | `INFO` | logging level |
 | `AUTH_MAX_AGE_SECONDS` | `86400` | maximum age of Telegram WebApp initData in seconds |
+| `WEB_APP_URL` | — | public HTTPS URL of the Telegram Mini App |
 | `AUTO_CREATE_TABLES` | `false` | build tables from models instead of migrations — local experiments only, never in production |
 
 ### Commands

@@ -16,3 +16,4 @@ downloads/
 # Local workspace
 AGENTS.md
 tasks/
+node_modules/
