@@ -131,6 +131,16 @@ export interface ImportResult {
   media_saved: number;
 }
 
+export interface CatalogDeck {
+  slug: string;
+  title: string;
+  description: string;
+  language: string;
+  tags: string[];
+  notes_count: number;
+  installed: boolean;
+}
+
 export type NextCard = StudyCard | StudyDone;
 
 export class ApiError extends Error {
@@ -168,6 +178,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export function fetchDecks(): Promise<Deck[]> {
   return request<Deck[]>("/decks");
+}
+
+export function fetchCatalog(): Promise<CatalogDeck[]> {
+  return request<CatalogDeck[]>("/catalog");
+}
+
+export function installCatalogDeck(slug: string): Promise<{deck_id: number; added: number}> {
+  return request(`/catalog/${encodeURIComponent(slug)}/install`, {method: "POST", body: JSON.stringify({})});
 }
 
 export function importFile(file: File, deckId: number | "auto"): Promise<ImportResult> {

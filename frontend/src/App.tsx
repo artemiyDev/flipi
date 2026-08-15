@@ -15,6 +15,8 @@ import {DeckScreen, Decks} from "./Decks";
 import {CardCreateScreen, CardScreen, CardsBrowser} from "./Cards";
 import {ImportScreen} from "./Import";
 import {Stats} from "./Stats";
+import {Catalog} from "./Catalog";
+import {Help} from "./Help";
 
 type Tab = "study" | "decks" | "stats";
 
@@ -26,7 +28,7 @@ function ProgressCounts({progress}: {progress: Progress}): JSX.Element {
   </span>;
 }
 
-function StudyDecks({onStudy, onCreateDeck, onUnauthorized}: {onStudy: (deckId: number | "all") => void; onCreateDeck: () => void; onUnauthorized: () => void}): JSX.Element {
+function StudyDecks({onStudy, onCreateDeck, onCatalog, onUnauthorized}: {onStudy: (deckId: number | "all") => void; onCreateDeck: () => void; onCatalog: () => void; onUnauthorized: () => void}): JSX.Element {
   const [decks, setDecks] = useState<Deck[] | null>(null);
   const [error, setError] = useState<Error | null>(null);
 
@@ -50,7 +52,7 @@ function StudyDecks({onStudy, onCreateDeck, onUnauthorized}: {onStudy: (deckId: 
     return <p className="hint centered">Загрузка…</p>;
   }
   if (decks.length === 0) {
-    return <section className="hint centered"><p>Пока нет колод</p><button className="primary" onClick={onCreateDeck}>Создать колоду</button><span hidden>Создайте колоду в боте</span></section>;
+    return <section className="hint centered"><p>Пока нет колод</p><div className="empty-actions"><button className="primary" onClick={onCatalog}>Из каталога</button><button onClick={onCreateDeck}>Создать свою</button></div><span hidden>Создайте колоду в боте</span></section>;
   }
 
   const total = decks.reduce(
@@ -159,6 +161,8 @@ export function App(): JSX.Element {
   const [cardBrowserQuery, setCardBrowserQuery] = useState<string | null>(null);
   const [openedCardId, setOpenedCardId] = useState<number | null>(null);
   const [importDeckId, setImportDeckId] = useState<number | null>(null);
+  const [catalogOpen, setCatalogOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
   const [createRequest, setCreateRequest] = useState(0);
   const [unauthorized, setUnauthorized] = useState(false);
   const showUnauthorized = useCallback(() => setUnauthorized(true), []);
@@ -168,6 +172,12 @@ export function App(): JSX.Element {
   }
   if (studyDeckId !== null) {
     return <main><Session deckId={studyDeckId} onClose={() => setStudyDeckId(null)} onUnauthorized={showUnauthorized} /></main>;
+  }
+  if (catalogOpen) {
+    return <main><Catalog onClose={() => setCatalogOpen(false)} onUnauthorized={showUnauthorized} /></main>;
+  }
+  if (helpOpen) {
+    return <main><Help onClose={() => setHelpOpen(false)} /></main>;
   }
   if (cardCreateDeckId !== null) {
     return <main><CardCreateScreen deckId={cardCreateDeckId} onClose={() => setCardCreateDeckId(null)} onUnauthorized={showUnauthorized} /></main>;
@@ -189,8 +199,9 @@ export function App(): JSX.Element {
     setCreateRequest((request) => request + 1);
   };
   return <main>
-    {tab === "study" && <StudyDecks onCreateDeck={openDeckCreation} onStudy={setStudyDeckId} onUnauthorized={showUnauthorized} />}
-    {tab === "decks" && <Decks createRequest={createRequest} onBrowseCards={() => setCardBrowserQuery("")} onImport={() => setImportDeckId(0)} onOpenDeck={setOpenedDeckId} onUnauthorized={showUnauthorized} />}
+    <header className="app-header"><button aria-label="Помощь" onClick={() => setHelpOpen(true)}>?</button></header>
+    {tab === "study" && <StudyDecks onCatalog={() => setCatalogOpen(true)} onCreateDeck={openDeckCreation} onStudy={setStudyDeckId} onUnauthorized={showUnauthorized} />}
+    {tab === "decks" && <Decks createRequest={createRequest} onBrowseCards={() => setCardBrowserQuery("")} onCatalog={() => setCatalogOpen(true)} onImport={() => setImportDeckId(0)} onOpenDeck={setOpenedDeckId} onUnauthorized={showUnauthorized} />}
     {tab === "stats" && <Stats onUnauthorized={showUnauthorized} />}
     <nav><button className={tab === "study" ? "active" : ""} onClick={() => setTab("study")}>Учить</button><button className={tab === "decks" ? "active" : ""} onClick={() => setTab("decks")}>Колоды</button><button className={tab === "stats" ? "active" : ""} onClick={() => setTab("stats")}>Статистика</button></nav>
   </main>;

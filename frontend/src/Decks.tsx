@@ -166,12 +166,13 @@ function CreateDeckForm({onCreated, onClose, onUnauthorized}: {
   </form>;
 }
 
-export function Decks({onOpenDeck, onUnauthorized, createRequest, onBrowseCards = () => undefined, onImport = () => undefined}: {
+export function Decks({onOpenDeck, onUnauthorized, createRequest, onBrowseCards = () => undefined, onImport = () => undefined, onCatalog = () => undefined}: {
   onOpenDeck: (id: number) => void;
   onUnauthorized: () => void;
   createRequest: number;
   onBrowseCards?: () => void;
   onImport?: () => void;
+  onCatalog?: () => void;
 }): JSX.Element {
   const [decks, setDecks] = useState<Deck[] | null>(null);
   const [archived, setArchived] = useState<ArchivedDeck[] | null>(null);
@@ -218,9 +219,9 @@ export function Decks({onOpenDeck, onUnauthorized, createRequest, onBrowseCards 
   }
 
   return <section className="decks-management">
-    <div className="deck-actions"><button className="primary" onClick={() => setCreateOpen(true)}>Новая колода</button><button onClick={onBrowseCards}>Поиск карточек</button><button onClick={onImport}>Импорт</button></div>
+    <div className="deck-actions"><button className="primary" onClick={() => setCreateOpen(true)}>Новая колода</button><button onClick={onBrowseCards}>Поиск карточек</button><button onClick={onImport}>Импорт</button><button onClick={onCatalog}>Каталог</button></div>
     {createOpen && <CreateDeckForm onClose={() => setCreateOpen(false)} onCreated={load} onUnauthorized={onUnauthorized} />}
-    {decks.length === 0 ? <p className="hint">Пока нет колод</p> : <div className="deck-list">
+    {decks.length === 0 ? <section className="empty-decks"><p className="hint">Пока нет колод</p><div className="empty-actions"><button className="primary" onClick={onCatalog}>Из каталога</button><button onClick={() => setCreateOpen(true)}>Создать свою</button></div></section> : <div className="deck-list">
       {decks.map((deck) => <button className="deck" key={deck.id} onClick={() => onOpenDeck(deck.id)}>
         <span>{deck.name}</span><ProgressCounts counts={{new: deck.new_count, learning: deck.learning_count, review: deck.review_count}} />
       </button>)}
