@@ -13,7 +13,7 @@ from bot.services.decks import (
     deck_summary,
     get_any_deck,
     get_deck,
-    list_archived_decks,
+    list_archived_deck_display_choices,
     rename_deck,
     restore_deck,
 )
@@ -53,9 +53,8 @@ async def list_archived(callback: CallbackQuery) -> None:
 
     async with async_session() as session:
         user = await get_or_create_user(session, callback.from_user)
-        decks = await list_archived_decks(session, user)
+        rows = await list_archived_deck_display_choices(session, user)
 
-    rows = [(deck.id, deck.name) for deck in decks]
     if not rows:
         await callback.message.answer("Архив пуст.", reply_markup=archived_deck_list([]))
         return

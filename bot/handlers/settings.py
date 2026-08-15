@@ -16,6 +16,7 @@ from bot.services.decks import (
     DECK_OPTION_PRESETS,
     apply_deck_preset,
     get_deck,
+    list_user_deck_display_choices,
     list_user_decks,
     toggle_bury_siblings,
     toggle_fuzzing,
@@ -49,13 +50,13 @@ async def settings_decks(callback: CallbackQuery) -> None:
         return
     async with async_session() as session:
         user = await get_or_create_user(session, callback.from_user)
-        decks = await list_user_decks(session, user)
-    if not decks:
+        deck_choices = await list_user_deck_display_choices(session, user)
+    if not deck_choices:
         await callback.message.answer("Сначала создайте колоду.", reply_markup=back_to_menu())
         return
     await callback.message.answer(
         "Выберите колоду для настройки.",
-        reply_markup=choose_deck("settings:deck", [(deck.id, deck.name) for deck in decks]),
+        reply_markup=choose_deck("settings:deck", deck_choices),
     )
 
 

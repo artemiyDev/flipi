@@ -28,7 +28,7 @@ from bot.services.cards import (
     set_card_suspended,
     update_note_field,
 )
-from bot.services.decks import get_deck, list_user_decks
+from bot.services.decks import get_deck, list_user_deck_display_choices
 from bot.services.users import get_or_create_user
 from bot.states import AddCard, EditNote, SetDueDate
 
@@ -43,16 +43,16 @@ async def add_card_choose_deck(callback: CallbackQuery, state: FSMContext) -> No
 
     async with async_session() as session:
         user = await get_or_create_user(session, callback.from_user)
-        decks = await list_user_decks(session, user)
+        deck_choices = await list_user_deck_display_choices(session, user)
 
-    if not decks:
+    if not deck_choices:
         await callback.message.answer("Сначала создайте колоду.")
         return
 
     await state.set_state(AddCard.deck_id)
     await callback.message.answer(
         "Выберите колоду для новой карточки.",
-        reply_markup=choose_deck("card:add", [(deck.id, deck.name) for deck in decks]),
+        reply_markup=choose_deck("card:add", deck_choices),
     )
 
 

@@ -20,7 +20,7 @@ from bot.services.cards import (
     get_next_review_ahead_card,
     increment_daily_counter,
 )
-from bot.services.decks import get_deck, list_user_decks
+from bot.services.decks import get_deck, list_user_deck_display_choices, list_user_decks
 from bot.services.media import extract_media_references, get_media_files_by_names, strip_media_references
 from bot.services.scheduler import review_with_fsrs
 from bot.services.users import get_or_create_user
@@ -37,15 +37,15 @@ async def choose_study_deck_handler(callback: CallbackQuery) -> None:
 
     async with async_session() as session:
         user = await get_or_create_user(session, callback.from_user)
-        decks = await list_user_decks(session, user)
+        deck_choices = await list_user_deck_display_choices(session, user)
 
-    if not decks:
+    if not deck_choices:
         await callback.message.answer("Сначала создайте колоду и добавьте карточки.")
         return
 
     await callback.message.answer(
         "Выберите колоду для занятия.",
-        reply_markup=choose_study_deck_keyboard([(deck.id, deck.name) for deck in decks]),
+        reply_markup=choose_study_deck_keyboard(deck_choices),
     )
 
 

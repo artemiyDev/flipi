@@ -8,7 +8,13 @@ from bot.db import async_session
 from bot.keyboards import choose_import_deck
 from bot.services.cards import create_basic_note, create_note_with_cards, note_exists
 from bot.services.apkg_importer import ImportedCard, ImportedNote, parse_apkg_media, parse_apkg_notes
-from bot.services.decks import get_deck, get_or_create_deck, list_user_decks
+from bot.services.decks import (
+    get_deck,
+    get_or_create_deck,
+    list_user_deck_display_choices,
+    list_user_decks,
+    resolve_apkg_deck,
+)
 from bot.services.importers import decode_text_payload, parse_text_cards
 from bot.services.media import save_imported_media_files
 from bot.services.users import get_or_create_user
@@ -26,16 +32,16 @@ async def import_choose_deck(callback: CallbackQuery, state: FSMContext) -> None
 
     async with async_session() as session:
         user = await get_or_create_user(session, callback.from_user)
-        decks = await list_user_decks(session, user)
+        deck_choices = await list_user_deck_display_choices(session, user)
 
-    if not decks:
+    if not deck_choices:
         await callback.message.answer("Сначала создайте колоду.")
         return
 
     await state.set_state(ImportCards.deck_id)
     await callback.message.answer(
         "Выберите колоду для импорта.",
-        reply_markup=choose_import_deck([(deck.id, deck.name) for deck in decks]),
+        reply_markup=choose_import_deck(deck_choices),
     )
 
 
@@ -317,6 +323,6 @@ async def _import_notes(
 async def _get_cached_deck(session, user, cache, name: str):
     deck = cache.get(name)
     if deck is None:
-        deck = await get_or_create_deck(session, user, name, "Imported from APKG")
+        deck = await resolve_apkg_deck(session, user, name, "Imported from APKG")
         cache[name] = deck
     return deck

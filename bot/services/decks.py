@@ -1,5 +1,7 @@
 from datetime import UTC, datetime
 
+from collections.abc import Mapping
+
 from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -50,8 +52,14 @@ async def create_deck(
     user: User,
     name: str,
     description: str | None = None,
+    parent: Deck | None = None,
 ) -> Deck:
-    deck = Deck(user_id=user.id, name=name.strip(), description=description)
+    deck = Deck(
+        user_id=user.id,
+        parent_id=parent.id if parent is not None else None,
+        name=name.strip(),
+        description=description,
+    )
     session.add(deck)
     await session.commit()
     await session.refresh(deck)
@@ -63,6 +71,7 @@ async def get_or_create_deck(
     user: User,
     name: str,
     description: str | None = None,
+    parent: Deck | None = None,
 ) -> Deck:
     result = await session.execute(
         select(Deck).where(Deck.user_id == user.id, Deck.name == name.strip())
@@ -73,22 +82,95 @@ async def get_or_create_deck(
             deck.is_archived = False
             await session.commit()
         return deck
-    return await create_deck(session, user, name, description)
+    return await create_deck(session, user, name, description, parent)
+
+
+async def resolve_apkg_deck(
+    session: AsyncSession,
+    user: User,
+    anki_name: str,
+    description: str | None = None,
+) -> Deck:
+    """Return the APKG target deck, creating its missing parent chain."""
+    name = anki_name.strip()
+    existing = await _get_deck_by_name(session, user, name)
+    if existing is not None:
+        if existing.is_archived:
+            existing.is_archived = False
+            await session.commit()
+        return existing
+
+    parent = None
+    for segment in name.split("::"):
+        parent = await get_or_create_deck(session, user, segment, description, parent)
+    return parent
+
+
+async def _get_deck_by_name(
+    session: AsyncSession,
+    user: User,
+    name: str,
+) -> Deck | None:
+    result = await session.execute(
+        select(Deck).where(Deck.user_id == user.id, Deck.name == name)
+    )
+    return result.scalar_one_or_none()
+
+
+def deck_full_path(deck: Deck, decks_by_id: Mapping[int, Deck]) -> str:
+    names = [deck.name]
+    seen = {deck.id}
+    parent_id = deck.parent_id
+    while parent_id is not None and parent_id not in seen:
+        parent = decks_by_id.get(parent_id)
+        if parent is None:
+            break
+        names.append(parent.name)
+        seen.add(parent.id)
+        parent_id = parent.parent_id
+    return "::".join(reversed(names))
 
 
 async def list_user_decks(session: AsyncSession, user: User) -> list[Deck]:
-    result = await session.execute(
-        select(Deck)
-        .where(Deck.user_id == user.id, Deck.is_archived.is_(False))
-        .order_by(Deck.name.asc())
-    )
-    return list(result.scalars())
+    decks = await _list_all_user_decks(session, user)
+    return [deck for deck in decks if not deck.is_archived]
 
 
 async def list_archived_decks(session: AsyncSession, user: User) -> list[Deck]:
+    decks = await _list_all_user_decks(session, user)
+    return [deck for deck in decks if deck.is_archived]
+
+
+async def list_user_deck_display_choices(
+    session: AsyncSession,
+    user: User,
+) -> list[tuple[int, str]]:
+    decks = await _list_all_user_decks(session, user)
+    decks_by_id = {deck.id: deck for deck in decks}
+    return [
+        (deck.id, deck_full_path(deck, decks_by_id))
+        for deck in decks
+        if not deck.is_archived
+    ]
+
+
+async def list_archived_deck_display_choices(
+    session: AsyncSession,
+    user: User,
+) -> list[tuple[int, str]]:
+    decks = await _list_all_user_decks(session, user)
+    decks_by_id = {deck.id: deck for deck in decks}
+    return [
+        (deck.id, deck_full_path(deck, decks_by_id))
+        for deck in decks
+        if deck.is_archived
+    ]
+
+
+async def _list_all_user_decks(session: AsyncSession, user: User) -> list[Deck]:
     result = await session.execute(
         select(Deck)
-        .where(Deck.user_id == user.id, Deck.is_archived.is_(True))
+        .where(Deck.user_id == user.id)
         .order_by(Deck.name.asc())
     )
     return list(result.scalars())
@@ -139,11 +221,21 @@ async def deck_list_with_counts(
     session: AsyncSession,
     user: User,
 ) -> list[tuple[int, str, int, int, int]]:
-    decks = await list_user_decks(session, user)
+    all_decks = await _list_all_user_decks(session, user)
+    decks = [deck for deck in all_decks if not deck.is_archived]
     rows = []
+    decks_by_id = {deck.id: deck for deck in all_decks}
     for deck in decks:
         new_count, learning_count, review_count = await get_deck_counts(session, deck)
-        rows.append((deck.id, deck.name, new_count, learning_count, review_count))
+        rows.append(
+            (
+                deck.id,
+                deck_full_path(deck, decks_by_id),
+                new_count,
+                learning_count,
+                review_count,
+            )
+        )
     return rows
 
 
