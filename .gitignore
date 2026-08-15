@@ -12,3 +12,7 @@ build/
 *.egg-info/
 tmp/
 downloads/
+
+# Local workspace
+AGENTS.md
+tasks/
