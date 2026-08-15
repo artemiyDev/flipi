@@ -84,11 +84,22 @@ class Deck(Base):
 
 class Note(Base):
     __tablename__ = "notes"
+    __table_args__ = (
+        Index(
+            "uq_notes_user_anki_guid",
+            "user_id",
+            "anki_guid",
+            unique=True,
+            postgresql_where=text("anki_guid IS NOT NULL"),
+            sqlite_where=text("anki_guid IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     deck_id: Mapped[int] = mapped_column(ForeignKey("decks.id", ondelete="CASCADE"), index=True)
     note_type: Mapped[str] = mapped_column(String(64), default="basic")
+    anki_guid: Mapped[str | None] = mapped_column(String(64))
     anki_model_id: Mapped[str | None] = mapped_column(String(64))
     fields: Mapped[dict | None] = mapped_column(JSONB)
     front: Mapped[str] = mapped_column(Text)

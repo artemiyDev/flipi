@@ -29,6 +29,12 @@ class BrowserQuery:
     has_flag: bool = False
 
 
+@dataclass(frozen=True)
+class AnkiImportResult:
+    status: str
+    added_cards: int = 0
+
+
 def card_question(card: Card) -> str:
     return _clean_rendered_text(card_question_html(card))
 
@@ -243,16 +249,20 @@ async def create_note_with_cards(
     fields: dict | None,
     source: str | None,
     card_specs: list[dict],
+    anki_guid: str | None = None,
+    extra: str | None = None,
 ) -> Note:
     now = datetime.now(UTC)
     note = Note(
         user_id=user.id,
         deck_id=deck.id,
         note_type=note_type,
+        anki_guid=anki_guid,
         anki_model_id=anki_model_id,
         fields=fields,
         front=front.strip(),
         back=back.strip(),
+        extra=extra,
         tags=tags or [],
         source=source,
     )
@@ -280,6 +290,164 @@ async def create_note_with_cards(
     await session.commit()
     await session.refresh(note)
     return note
+
+
+async def import_anki_note(
+    session: AsyncSession,
+    user: User,
+    deck: Deck,
+    front: str,
+    back: str,
+    extra: str | None,
+    tags: list[str],
+    note_type: str,
+    anki_guid: str | None,
+    anki_model_id: str | None,
+    fields: dict[str, str],
+    source: str,
+    card_specs: list[dict],
+) -> AnkiImportResult:
+    note = await _get_note_by_anki_guid(session, user, anki_guid)
+    if note is None:
+        note = await _get_legacy_note(session, user, deck, front, back)
+
+    if note is None:
+        await create_note_with_cards(
+            session=session,
+            user=user,
+            deck=deck,
+            front=front,
+            back=back,
+            extra=extra,
+            tags=tags,
+            note_type=note_type,
+            anki_guid=anki_guid,
+            anki_model_id=anki_model_id,
+            fields=fields,
+            source=source,
+            card_specs=card_specs,
+        )
+        return AnkiImportResult(status="added", added_cards=len(card_specs))
+
+    changed = _update_imported_note(
+        note,
+        front=front,
+        back=back,
+        extra=extra,
+        tags=tags,
+        note_type=note_type,
+        anki_guid=anki_guid,
+        anki_model_id=anki_model_id,
+        fields=fields,
+    )
+    existing_cards = {card.template_ord: card for card in note.cards}
+    added_cards = 0
+    for index, spec in enumerate(card_specs):
+        template_ord = int(spec.get("template_ord", index))
+        card = existing_cards.get(template_ord)
+        if card is None:
+            card_deck = spec.get("deck") or deck
+            session.add(
+                Card(
+                    user_id=user.id,
+                    deck_id=card_deck.id,
+                    note_id=note.id,
+                    direction=spec.get("direction") or "front_back",
+                    template_name=spec.get("template_name"),
+                    template_ord=template_ord,
+                    question_template=spec.get("question_template"),
+                    answer_template=spec.get("answer_template"),
+                    due_at=datetime.now(UTC),
+                    state="new",
+                    fsrs_data=new_fsrs_card_json(),
+                )
+            )
+            changed = True
+            added_cards += 1
+            continue
+        changed = _update_card_template(card, spec) or changed
+
+    if changed:
+        await session.commit()
+        return AnkiImportResult(status="updated", added_cards=added_cards)
+    return AnkiImportResult(status="unchanged")
+
+
+async def _get_note_by_anki_guid(
+    session: AsyncSession,
+    user: User,
+    anki_guid: str | None,
+) -> Note | None:
+    if anki_guid is None:
+        return None
+    result = await session.execute(
+        select(Note)
+        .where(Note.user_id == user.id, Note.anki_guid == anki_guid)
+        .options(selectinload(Note.cards))
+    )
+    return result.scalar_one_or_none()
+
+
+async def _get_legacy_note(
+    session: AsyncSession,
+    user: User,
+    deck: Deck,
+    front: str,
+    back: str,
+) -> Note | None:
+    result = await session.execute(
+        select(Note)
+        .where(
+            Note.user_id == user.id,
+            Note.deck_id == deck.id,
+            Note.anki_guid.is_(None),
+            Note.front == front.strip(),
+            Note.back == back.strip(),
+        )
+        .options(selectinload(Note.cards))
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
+def _update_imported_note(
+    note: Note,
+    *,
+    front: str,
+    back: str,
+    extra: str | None,
+    tags: list[str],
+    note_type: str,
+    anki_guid: str | None,
+    anki_model_id: str | None,
+    fields: dict[str, str],
+) -> bool:
+    updates = {
+        "front": front.strip(),
+        "back": back.strip(),
+        "extra": extra,
+        "tags": tags,
+        "note_type": note_type,
+        "anki_guid": anki_guid,
+        "anki_model_id": anki_model_id,
+        "fields": fields,
+    }
+    changed = False
+    for field_name, value in updates.items():
+        if getattr(note, field_name) != value:
+            setattr(note, field_name, value)
+            changed = True
+    return changed
+
+
+def _update_card_template(card: Card, spec: dict) -> bool:
+    changed = False
+    for field_name in ("template_name", "question_template", "answer_template"):
+        value = spec.get(field_name)
+        if getattr(card, field_name) != value:
+            setattr(card, field_name, value)
+            changed = True
+    return changed
 
 
 async def note_exists(

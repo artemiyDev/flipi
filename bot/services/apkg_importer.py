@@ -36,8 +36,10 @@ class ImportedCard:
 class ImportedNote:
     front: str
     back: str
+    extra: str | None
     tags: list[str]
     note_type: str
+    guid: str | None
     anki_model_id: str | None
     fields: dict[str, str]
     deck_name: str | None
@@ -107,9 +109,13 @@ def _read_collection_notes(db_path: Path) -> list[ImportedNote]:
         conn.row_factory = sqlite3.Row
         models = _load_models(conn)
         decks = _load_decks(conn)
+        note_columns = {column[1] for column in conn.execute("PRAGMA table_info(notes)")}
+        guid_column = "n.guid" if "guid" in note_columns else "NULL"
         rows = conn.execute(
             """
-            SELECT n.id AS note_id, c.ord, c.did, n.mid, n.flds, n.tags
+            SELECT n.id AS note_id, """
+            + guid_column
+            + """ AS guid, c.ord, c.did, n.mid, n.flds, n.tags
             FROM cards c
             JOIN notes n ON n.id = c.nid
             ORDER BY n.id, c.ord, c.id
@@ -142,8 +148,10 @@ def _read_collection_notes(db_path: Path) -> list[ImportedNote]:
                 notes[note_id] = ImportedNote(
                     front=imported.front,
                     back=imported.back,
+                    extra=fields.get("Extra") or None,
                     tags=tags,
                     note_type=imported.note_type,
+                    guid=str(row["guid"]) if row["guid"] is not None else None,
                     anki_model_id=imported.anki_model_id,
                     fields=imported.fields or {},
                     deck_name=deck_name,
@@ -153,8 +161,10 @@ def _read_collection_notes(db_path: Path) -> list[ImportedNote]:
                 notes[note_id] = ImportedNote(
                     front=existing.front,
                     back=existing.back,
+                    extra=existing.extra,
                     tags=existing.tags,
                     note_type=existing.note_type,
+                    guid=existing.guid,
                     anki_model_id=existing.anki_model_id,
                     fields=existing.fields,
                     deck_name=existing.deck_name,

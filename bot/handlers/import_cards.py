@@ -6,7 +6,7 @@ from aiogram.types import CallbackQuery, Message
 
 from bot.db import async_session
 from bot.keyboards import choose_import_deck
-from bot.services.cards import create_basic_note, create_note_with_cards, note_exists
+from bot.services.cards import create_basic_note, import_anki_note, note_exists
 from bot.services.apkg_importer import ImportedCard, ImportedNote, parse_apkg_media, parse_apkg_notes
 from bot.services.decks import (
     get_deck,
@@ -243,9 +243,10 @@ async def _import_notes(
                 await state.clear()
                 return
 
-        imported_notes = 0
+        added_notes = 0
+        updated_notes = 0
+        unchanged_notes = 0
         imported_cards = 0
-        skipped = 0
         media_saved = 0
         media_skipped = 0
         media_saved_once = False
@@ -258,10 +259,6 @@ async def _import_notes(
 
             if note_deck is None:
                 continue
-            if await note_exists(session, user, note_deck, note.front, note.back):
-                skipped += 1
-                continue
-
             card_specs = []
             for card in note.cards:
                 card_deck = note_deck
@@ -278,21 +275,28 @@ async def _import_notes(
                     }
                 )
 
-            await create_note_with_cards(
+            result = await import_anki_note(
                 session=session,
                 user=user,
                 deck=note_deck,
                 front=note.front,
                 back=note.back,
+                extra=note.extra,
                 tags=note.tags,
                 note_type=note.note_type,
+                anki_guid=note.guid,
                 anki_model_id=note.anki_model_id,
                 fields=note.fields,
                 source=source,
                 card_specs=card_specs,
             )
-            imported_notes += 1
-            imported_cards += len(card_specs)
+            if result.status == "added":
+                added_notes += 1
+            elif result.status == "updated":
+                updated_notes += 1
+            else:
+                unchanged_notes += 1
+            imported_cards += result.added_cards
 
             if auto_decks and media_files and not media_saved_once:
                 saved, skipped_media = await save_imported_media_files(session, user, None, media_files)
@@ -314,8 +318,8 @@ async def _import_notes(
 
     await state.clear()
     await message.answer(
-        f"Импортировано заметок: {imported_notes}. Карточек: {imported_cards}. "
-        f"Пропущено дублей: {skipped}.\n"
+        f"Добавлено: {added_notes}, обновлено: {updated_notes}, без изменений: {unchanged_notes}. "
+        f"Новых карточек: {imported_cards}.\n"
         f"Media saved: {media_saved}. Media skipped: {media_skipped}."
     )
 

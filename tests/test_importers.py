@@ -131,6 +131,30 @@ def test_parse_apkg_groups_cards_by_note(tmp_path: Path) -> None:
     assert notes[0].cards[1].template_name == "Reverse"
 
 
+def test_parse_apkg_reads_note_guid(tmp_path: Path) -> None:
+    collection = tmp_path / "collection.anki2"
+    conn = sqlite3.connect(collection)
+    conn.execute("CREATE TABLE col (models text)")
+    conn.execute("CREATE TABLE notes (id integer primary key, guid text, mid integer, flds text, tags text)")
+    conn.execute("CREATE TABLE cards (id integer primary key, nid integer, did integer, ord integer)")
+    conn.execute("INSERT INTO col(models) VALUES (?)", (json.dumps({"1": {"type": 0, "tmpls": []}}),))
+    conn.execute(
+        "INSERT INTO notes(id, guid, mid, flds, tags) VALUES (1, 'stable-guid', 1, ?, '')",
+        ("Question\x1fAnswer",),
+    )
+    conn.execute("INSERT INTO cards(id, nid, did, ord) VALUES (1, 1, 1, 0)")
+    conn.commit()
+    conn.close()
+
+    package = tmp_path / "deck.apkg"
+    with zipfile.ZipFile(package, "w") as archive:
+        archive.write(collection, "collection.anki2")
+
+    notes = parse_apkg_notes(package.read_bytes())
+
+    assert notes[0].guid == "stable-guid"
+
+
 def test_parse_apkg_deck_name(tmp_path: Path) -> None:
     collection = tmp_path / "collection.anki2"
     conn = sqlite3.connect(collection)
