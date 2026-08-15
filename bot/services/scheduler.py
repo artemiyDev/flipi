@@ -57,7 +57,9 @@ def review_with_fsrs(
     fsrs_card = FsrsCard.from_json(_json_text(card.fsrs_data or new_fsrs_card_json()))
     previous_due = card.due_at
 
-    reviewed_card, fsrs_log = scheduler.review_card(fsrs_card, Rating(rating_value))
+    reviewed_card, fsrs_log = scheduler.review_card(
+        fsrs_card, Rating(rating_value), review_duration=elapsed_ms
+    )
     due_at = reviewed_card.due
     if due_at.tzinfo is None:
         due_at = due_at.replace(tzinfo=UTC)
@@ -80,3 +82,29 @@ def review_with_fsrs(
         next_due_at=due_at,
         fsrs_review_log=_json_value(fsrs_log.to_json()),
     )
+
+
+def preview_intervals(card: Card, deck: Deck) -> dict[str, str]:
+    scheduler = Scheduler(**scheduler_kwargs_from_deck(deck))
+    fsrs_card = FsrsCard.from_json(_json_text(card.fsrs_data or new_fsrs_card_json()))
+    reviewed_at = datetime.now(UTC)
+    intervals: dict[str, str] = {}
+    for rating, name in ((1, "again"), (2, "hard"), (3, "good"), (4, "easy")):
+        reviewed_card, _ = scheduler.review_card(
+            fsrs_card, Rating(rating), review_datetime=reviewed_at
+        )
+        intervals[name] = format_interval(reviewed_card.due - reviewed_at)
+    return intervals
+
+
+def format_interval(interval: timedelta) -> str:
+    minutes = max(1, round(interval.total_seconds() / 60))
+    if minutes < 60:
+        return f"{minutes} мин"
+    hours = round(minutes / 60)
+    if hours < 24:
+        return f"{hours} ч"
+    days = round(hours / 24)
+    if days < 30:
+        return f"{days} дн"
+    return f"{max(1, round(days / 30))} мес"

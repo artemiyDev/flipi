@@ -3,14 +3,16 @@ import hashlib
 import hmac
 import json
 import time
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from urllib.parse import urlencode
 
 import httpx
+from sqlalchemy import select
 
 from app.deps import get_db_session
 from app.main import create_app
-from bot.models import User
+from bot.models import Card, MediaFile, ReviewLog, User
 from bot.services.decks import archive_deck, create_deck
 from bot.services.users import get_or_create_user
 
@@ -25,13 +27,13 @@ class TelegramUser:
     language_code = "en"
 
 
-def signed_init_data(auth_date: int | None = None) -> str:
+def signed_init_data(auth_date: int | None = None, telegram_id: int = TEST_TELEGRAM_ID) -> str:
     data = {
         "auth_date": str(auth_date if auth_date is not None else int(time.time())),
         "query_id": "test-query",
         "user": json.dumps(
             {
-                "id": TEST_TELEGRAM_ID,
+                "id": telegram_id,
                 "first_name": "Test",
                 "last_name": "User",
                 "username": "testuser",
@@ -73,6 +75,20 @@ def request(app, path: str, headers: dict[str, str] | None = None) -> httpx.Resp
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             return await client.get(path, headers=headers)
+
+    return asyncio.run(send())
+
+
+def post_request(
+    app,
+    path: str,
+    payload: dict,
+    headers: dict[str, str] | None = None,
+) -> httpx.Response:
+    async def send() -> httpx.Response:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            return await client.post(path, json=payload, headers=headers)
 
     return asyncio.run(send())
 
@@ -153,3 +169,195 @@ def test_healthz_does_not_require_authorization(session_factory, monkeypatch) ->
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok", "database": True}
+
+
+def test_study_next_renders_html_media_and_has_no_side_effects(session_factory, monkeypatch) -> None:
+    from bot.services.cards import create_basic_note
+
+    async def create_data() -> tuple[int, int]:
+        async with session_factory() as session:
+            user = await get_or_create_user(session, TelegramUser())
+            deck = await create_deck(session, user, "Spanish")
+            note = await create_basic_note(
+                session,
+                user,
+                deck,
+                '<b>hablar</b><ul><li>verb</li></ul><script>alert(1)</script>'
+                '<img src="https://evil.example/x.png" onerror="alert(1)"> [media:word.png]',
+                "to speak [sound:word.mp3]",
+            )
+            media = MediaFile(
+                user_id=user.id,
+                deck_id=deck.id,
+                original_name="word.png",
+                content_type="image/png",
+                size_bytes=3,
+                sha256="a" * 64,
+                content=b"png",
+            )
+            sound = MediaFile(
+                user_id=user.id,
+                deck_id=deck.id,
+                original_name="word.mp3",
+                content_type="audio/mpeg",
+                size_bytes=3,
+                sha256="b" * 64,
+                content=b"mp3",
+            )
+            session.add_all([media, sound])
+            await session.commit()
+            card = (await session.execute(Card.__table__.select())).first()[0]
+            return card, media.id
+
+    card_id, media_id = asyncio.run(create_data())
+    app = build_app(session_factory, monkeypatch)
+    headers = {"X-Telegram-Init-Data": signed_init_data()}
+
+    first = request(app, "/api/study/next?deck_id=all", headers)
+    second = request(app, "/api/study/next?deck_id=all", headers)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    payload = first.json()
+    assert payload["card_id"] == card_id
+    assert payload["progress"] == {"new": 1, "learning": 0, "review": 0}
+    assert set(payload["intervals"]) == {"again", "hard", "good", "easy"}
+    assert "<b>hablar</b>" in payload["question_html"]
+    assert "<ul><li>verb</li></ul>" in payload["question_html"]
+    assert "script" not in payload["question_html"]
+    assert "evil.example" not in payload["question_html"]
+    assert f'<img src="/api/media/{media_id}">' in payload["question_html"]
+    assert {item["name"] for item in payload["media"]} == {"word.png", "word.mp3"}
+
+    async def card_state() -> tuple[str, int]:
+        async with session_factory() as session:
+            card = await session.get(Card, card_id)
+            return card.state, card.reps
+
+    assert asyncio.run(card_state()) == ("new", 0)
+
+
+def test_study_answer_records_review_buries_siblings_and_returns_media(session_factory, monkeypatch) -> None:
+    from bot.services.cards import create_basic_note
+
+    async def create_data() -> tuple[int, int, int]:
+        async with session_factory() as session:
+            user = await get_or_create_user(session, TelegramUser())
+            deck = await create_deck(session, user, "Spanish")
+            note = await create_basic_note(
+                session, user, deck, "front", "back", create_reverse=True
+            )
+            cards = list((await session.execute(Card.__table__.select())).all())
+            return deck.id, cards[0][0], cards[1][0]
+
+    deck_id, card_id, sibling_id = asyncio.run(create_data())
+    app = build_app(session_factory, monkeypatch)
+    headers = {"X-Telegram-Init-Data": signed_init_data()}
+
+    invalid = post_request(app, "/api/study/answer", {"card_id": card_id, "rating": 5}, headers)
+    response = post_request(
+        app,
+        "/api/study/answer",
+        {"card_id": card_id, "rating": 3, "elapsed_ms": 321},
+        headers,
+    )
+    next_response = request(app, f"/api/study/next?deck_id={deck_id}", headers)
+
+    assert invalid.status_code == 422
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["state"] in {"learning", "review"}
+    assert next_response.json()["card_id"] is None
+
+    foreign_response = post_request(
+        app,
+        "/api/study/answer",
+        {"card_id": card_id, "rating": 3},
+        {"X-Telegram-Init-Data": signed_init_data(telegram_id=987654)},
+    )
+    assert foreign_response.status_code == 404
+
+    async def review_state() -> tuple[int | None, bool]:
+        async with session_factory() as session:
+            review = (await session.execute(select(ReviewLog))).scalar_one()
+            sibling = await session.get(Card, sibling_id)
+            return review.elapsed_ms, sibling.buried_until is not None
+
+    assert asyncio.run(review_state()) == (321, True)
+
+    async def make_card_due() -> str:
+        async with session_factory() as session:
+            card = await session.get(Card, card_id)
+            card.due_at = datetime.now(UTC)
+            await session.commit()
+            return card.state
+
+    for _ in range(3):
+        if asyncio.run(make_card_due()) == "review":
+            break
+        response = post_request(
+            app, "/api/study/answer", {"card_id": card_id, "rating": 3}, headers
+        )
+        assert response.status_code == 200
+    assert response.json()["state"] == "review"
+
+
+def test_media_endpoint_is_private_to_the_current_user(session_factory, monkeypatch) -> None:
+    async def create_data() -> int:
+        async with session_factory() as session:
+            user = await get_or_create_user(session, TelegramUser())
+            media = MediaFile(
+                user_id=user.id,
+                original_name="word.png",
+                content_type="image/png",
+                size_bytes=3,
+                sha256="c" * 64,
+                content=b"png",
+            )
+            session.add(media)
+            await session.commit()
+            return media.id
+
+    media_id = asyncio.run(create_data())
+    app = build_app(session_factory, monkeypatch)
+    headers = {"X-Telegram-Init-Data": signed_init_data()}
+
+    response = request(app, f"/api/media/{media_id}", headers)
+
+    assert response.status_code == 200
+    assert response.content == b"png"
+    assert response.headers["content-type"] == "image/png"
+    assert response.headers["cache-control"] == "private, max-age=86400"
+
+    foreign_response = request(
+        app,
+        f"/api/media/{media_id}",
+        {"X-Telegram-Init-Data": signed_init_data(telegram_id=987654)},
+    )
+    assert foreign_response.status_code == 404
+
+
+def test_study_next_all_iterates_decks_then_reports_done_today(session_factory, monkeypatch) -> None:
+    from bot.services.cards import create_basic_note
+
+    async def create_data() -> None:
+        async with session_factory() as session:
+            user = await get_or_create_user(session, TelegramUser())
+            alpha = await create_deck(session, user, "Alpha")
+            beta = await create_deck(session, user, "Beta")
+            await create_basic_note(session, user, alpha, "a", "a")
+            await create_basic_note(session, user, beta, "b", "b")
+
+    asyncio.run(create_data())
+    app = build_app(session_factory, monkeypatch)
+    headers = {"X-Telegram-Init-Data": signed_init_data()}
+
+    first = request(app, "/api/study/next?deck_id=all", headers).json()
+    post_request(app, "/api/study/answer", {"card_id": first["card_id"], "rating": 3}, headers)
+    second = request(app, "/api/study/next?deck_id=all", headers).json()
+    post_request(app, "/api/study/answer", {"card_id": second["card_id"], "rating": 3}, headers)
+    done = request(app, "/api/study/next?deck_id=all", headers)
+
+    assert first["deck_name"] == "Alpha"
+    assert second["deck_name"] == "Beta"
+    assert done.json() == {"card_id": None, "done_today": 2}

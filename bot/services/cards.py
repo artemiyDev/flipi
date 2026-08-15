@@ -30,8 +30,12 @@ class BrowserQuery:
 
 
 def card_question(card: Card) -> str:
+    return _clean_rendered_text(card_question_html(card))
+
+
+def card_question_html(card: Card) -> str:
     if card.question_template and card.note.fields:
-        rendered = _render_template(
+        rendered = _render_template_html(
             card.question_template,
             card.note.fields,
             cloze_no=card.template_ord + 1,
@@ -45,12 +49,16 @@ def card_question(card: Card) -> str:
 
 
 def card_answer(card: Card) -> str:
+    return _clean_rendered_text(card_answer_html(card))
+
+
+def card_answer_html(card: Card) -> str:
     if card.answer_template and card.note.fields:
-        rendered = _render_template(
+        rendered = _render_template_html(
             card.answer_template,
             card.note.fields,
             cloze_no=card.template_ord + 1,
-            front_side=card_question(card),
+            front_side=card_question_html(card),
             show_cloze_answer=True,
         )
         if rendered:
@@ -61,6 +69,18 @@ def card_answer(card: Card) -> str:
 
 
 def _render_template(
+    template: str,
+    fields: dict,
+    cloze_no: int | None = None,
+    front_side: str = "",
+    show_cloze_answer: bool = False,
+) -> str:
+    return _clean_rendered_text(
+        _render_template_html(template, fields, cloze_no, front_side, show_cloze_answer)
+    )
+
+
+def _render_template_html(
     template: str,
     fields: dict,
     cloze_no: int | None = None,
@@ -86,7 +106,7 @@ def _render_template(
             expression = expression.removeprefix("type:").strip()
         return str(fields.get(expression, ""))
 
-    return _clean_rendered_text(re.sub(r"{{([^#/^][^}]*)}}", replace_field, rendered))
+    return re.sub(r"{{([^#/^][^}]*)}}", replace_field, rendered)
 
 
 def _render_conditionals(template: str, fields: dict) -> str:

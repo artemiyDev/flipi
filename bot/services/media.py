@@ -54,6 +54,18 @@ def strip_media_references(text: str) -> str:
     return re.sub(r"\[(?:sound|media):[^\]]+\]", "", text).strip()
 
 
+def replace_image_media_references(text: str, media_files: list[MediaFile]) -> str:
+    media_by_name = {media.original_name: media for media in media_files}
+
+    def replace(match: re.Match) -> str:
+        media = media_by_name.get(match.group(1))
+        if media is not None and (media.content_type or "").startswith("image/"):
+            return f'<img src="/api/media/{media.id}">'
+        return ""
+
+    return re.sub(r"\[(?:sound|media):([^\]]+)\]", replace, text)
+
+
 async def get_media_files_by_names(
     session: AsyncSession,
     user: User,
@@ -70,6 +82,13 @@ async def get_media_files_by_names(
     for media in result.scalars():
         media_by_name.setdefault(media.original_name, media)
     return [media_by_name[name] for name in names if name in media_by_name]
+
+
+async def get_media_file(session: AsyncSession, user: User, media_id: int) -> MediaFile | None:
+    result = await session.execute(
+        select(MediaFile).where(MediaFile.id == media_id, MediaFile.user_id == user.id)
+    )
+    return result.scalar_one_or_none()
 
 
 async def _media_exists(

@@ -10,7 +10,6 @@ from bot.keyboards import rate_card, show_answer
 from bot.services.cards import (
     card_answer,
     card_question,
-    bury_sibling_cards,
     count_cards_by_query,
     count_due_cards_by_query,
     get_card,
@@ -18,11 +17,10 @@ from bot.services.cards import (
     get_next_due_card_by_query,
     get_next_new_card_without_limit,
     get_next_review_ahead_card,
-    increment_daily_counter,
 )
-from bot.services.decks import get_deck, list_user_deck_display_choices, list_user_decks
+from bot.services.decks import get_deck, list_user_deck_display_choices
 from bot.services.media import extract_media_references, get_media_files_by_names, strip_media_references
-from bot.services.scheduler import review_with_fsrs
+from bot.services.study import answer_card, get_next_card_for_user
 from bot.services.users import get_or_create_user
 from bot.states import FilteredStudy
 
@@ -189,17 +187,11 @@ async def rate_study_card(callback: CallbackQuery, state: FSMContext) -> None:
         if card is None:
             await callback.message.answer("Карточка не найдена.")
             return
-        previous_state = card.state
-        review = review_with_fsrs(card, card.deck, rating)
-        session.add(review)
-        if card.deck.bury_siblings:
-            await bury_sibling_cards(session, card, user.timezone)
-        await increment_daily_counter(session, card, previous_state, user.timezone)
-        await session.commit()
+        await answer_card(session, user, card, rating)
 
         data = await state.get_data()
         if data.get("study_scope") == "all":
-            next_card = await _get_next_card_for_user(session, user)
+            next_card = await get_next_card_for_user(session, user)
         elif data.get("study_scope") == "filter":
             next_card = await get_next_due_card_by_query(session, user, data.get("filter_query", ""))
         elif data.get("study_scope") == "review_ahead":
@@ -251,12 +243,3 @@ async def _send_media_for_texts(message: Message, session, user, *texts: str) ->
             await message.answer_audio(file)
         else:
             await message.answer_document(file)
-
-
-async def _get_next_card_for_user(session, user):
-    decks = await list_user_decks(session, user)
-    for deck in decks:
-        card = await get_next_due_card(session, deck, user.timezone)
-        if card is not None:
-            return card
-    return None
