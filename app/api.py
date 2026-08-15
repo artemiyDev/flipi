@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
@@ -23,6 +23,7 @@ from bot.services.media import (
     replace_image_media_references,
 )
 from bot.services.scheduler import preview_intervals
+from bot.services.stats import forecast_due_counts, heatmap_review_counts, stats_overview
 from bot.services.study import (
     answer_card,
     count_done_today,
@@ -37,6 +38,37 @@ class StudyAnswerRequest(BaseModel):
     card_id: int
     rating: int = Field(ge=1, le=4)
     elapsed_ms: int | None = None
+
+
+@router.get("/stats/overview")
+async def stats_overview_endpoint(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> dict:
+    return await stats_overview(session, user)
+
+
+@router.get("/stats/heatmap")
+async def stats_heatmap(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    user: Annotated[User, Depends(get_current_user)],
+    weeks: Annotated[int, Query(ge=1, le=53)] = 26,
+) -> dict:
+    counts = await heatmap_review_counts(session, user, weeks)
+    return {"days": [{"date": day.isoformat(), "count": count} for day, count in counts]}
+
+
+@router.get("/stats/forecast")
+async def stats_forecast(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    user: Annotated[User, Depends(get_current_user)],
+    days: Annotated[int, Query(ge=1, le=90)] = 30,
+) -> dict:
+    overdue, counts = await forecast_due_counts(session, user, days)
+    return {
+        "overdue": overdue,
+        "days": [{"date": day.isoformat(), "count": count} for day, count in counts],
+    }
 
 
 @router.get("/healthz")
