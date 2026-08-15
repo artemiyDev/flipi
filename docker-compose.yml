@@ -24,6 +24,7 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://ankibot:ankibot@db:5432/ankibot}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       AUTO_CREATE_TABLES: ${AUTO_CREATE_TABLES:-false}
+      WEB_APP_URL: ${WEB_APP_URL:-}
     depends_on:
       db:
         condition: service_healthy
