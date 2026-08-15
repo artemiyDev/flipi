@@ -20,6 +20,7 @@ from bot.services.decks import (
     list_user_decks,
     toggle_bury_siblings,
     toggle_fuzzing,
+    validate_deck_setting_value,
     update_deck_setting,
 )
 from bot.services.stats import daily_review_counts, user_stats
@@ -229,7 +230,7 @@ async def edit_deck_setting_finish(message: Message, state: FSMContext) -> None:
         return
     data = await state.get_data()
     field = data["field"]
-    parsed = _parse_setting_value(field, message.text or "")
+    parsed = validate_deck_setting_value(field, message.text or "")
     if parsed is None:
         await message.answer("Значение вне допустимого диапазона.")
         return
@@ -276,26 +277,7 @@ async def stats_summary(callback: CallbackQuery) -> None:
 
 
 def _parse_setting_value(field: str, raw: str) -> int | float | None:
-    raw = raw.strip()
-    try:
-        if field in {"learning_steps_minutes", "relearning_steps_minutes"}:
-            values = [int(item.strip()) for item in raw.split(",") if item.strip()]
-            if not values or len(values) > 6:
-                return None
-            return values if all(1 <= value <= 1440 for value in values) else None
-        raw = raw.replace(",", ".")
-        if field in {"new_cards_per_day", "reviews_per_day"}:
-            value = int(raw)
-            return value if 0 <= value <= 5000 else None
-        if field == "desired_retention":
-            value = float(raw)
-            return value if 0.7 <= value <= 0.97 else None
-        if field == "maximum_interval_days":
-            value = int(raw)
-            return value if 1 <= value <= 36500 else None
-    except ValueError:
-        return None
-    return None
+    return validate_deck_setting_value(field, raw)  # type: ignore[return-value]
 
 
 def _format_day_count(day, count: int) -> str:

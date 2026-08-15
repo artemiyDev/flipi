@@ -1,8 +1,10 @@
 from datetime import UTC, datetime
 
 from collections.abc import Mapping
+from typing import Any
 
 from sqlalchemy import Select, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.models import Card, Deck, Note, ReviewLog, User
@@ -46,6 +48,68 @@ DECK_OPTION_PRESETS = {
     },
 }
 
+DECK_SETTINGS_FIELDS = frozenset(
+    {
+        "new_cards_per_day",
+        "reviews_per_day",
+        "desired_retention",
+        "learning_steps_minutes",
+        "relearning_steps_minutes",
+        "maximum_interval_days",
+        "bury_siblings",
+        "enable_fuzzing",
+    }
+)
+
+
+class DeckNameConflictError(ValueError):
+    """Raised when a deck name is already used at the same hierarchy level."""
+
+
+def validate_api_deck_name(name: str) -> str:
+    normalized = name.strip()
+    if not normalized:
+        raise ValueError("Deck name must not be empty")
+    if len(normalized) > 255:
+        raise ValueError("Deck name must be at most 255 characters")
+    if "::" in normalized:
+        raise ValueError("Deck name must not contain ::")
+    return normalized
+
+
+def validate_deck_setting_value(field: str, value: Any) -> int | float | bool | list[int] | None:
+    if field in {"learning_steps_minutes", "relearning_steps_minutes"}:
+        if isinstance(value, str):
+            try:
+                value = [int(item.strip()) for item in value.strip().split(",") if item.strip()]
+            except ValueError:
+                return None
+        if not isinstance(value, list) or len(value) > 6 or not value:
+            return None
+        if any(isinstance(item, bool) or not isinstance(item, int) for item in value):
+            return None
+        return value if all(1 <= item <= 1440 for item in value) else None
+
+    if isinstance(value, str):
+        value = value.strip().replace(",", ".")
+        try:
+            if field in {"new_cards_per_day", "reviews_per_day", "maximum_interval_days"}:
+                value = int(value)
+            elif field == "desired_retention":
+                value = float(value)
+        except ValueError:
+            return None
+
+    if field in {"new_cards_per_day", "reviews_per_day"}:
+        return value if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 5000 else None
+    if field == "desired_retention":
+        return value if isinstance(value, (int, float)) and not isinstance(value, bool) and 0.7 <= value <= 0.97 else None
+    if field == "maximum_interval_days":
+        return value if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 36500 else None
+    if field in {"bury_siblings", "enable_fuzzing"}:
+        return value if isinstance(value, bool) else None
+    return None
+
 
 async def create_deck(
     session: AsyncSession,
@@ -64,6 +128,23 @@ async def create_deck(
     await session.commit()
     await session.refresh(deck)
     return deck
+
+
+async def create_api_root_deck(
+    session: AsyncSession,
+    user: User,
+    name: str,
+    description: str | None = None,
+) -> Deck:
+    normalized_name = validate_api_deck_name(name)
+    existing = await _get_deck_by_name(session, user, normalized_name)
+    if existing is not None:
+        raise DeckNameConflictError("Deck name already exists")
+    try:
+        return await create_deck(session, user, normalized_name, description)
+    except IntegrityError as exc:
+        await session.rollback()
+        raise DeckNameConflictError("Deck name already exists") from exc
 
 
 async def get_or_create_deck(
@@ -177,6 +258,10 @@ async def list_user_decks(session: AsyncSession, user: User) -> list[Deck]:
 async def list_archived_decks(session: AsyncSession, user: User) -> list[Deck]:
     decks = await _list_all_user_decks(session, user)
     return [deck for deck in decks if deck.is_archived]
+
+
+async def list_all_user_decks(session: AsyncSession, user: User) -> list[Deck]:
+    return await _list_all_user_decks(session, user)
 
 
 async def list_user_deck_display_choices(
@@ -304,16 +389,26 @@ async def update_deck_setting(
     field: str,
     value: int | float,
 ) -> None:
-    if field not in {
-        "new_cards_per_day",
-        "reviews_per_day",
-        "desired_retention",
-        "learning_steps_minutes",
-        "relearning_steps_minutes",
-        "maximum_interval_days",
-    }:
-        raise ValueError(f"Unsupported deck setting: {field}")
-    setattr(deck, field, value)
+    await update_deck_settings(session, deck, {field: value})
+
+
+async def update_deck_settings(
+    session: AsyncSession,
+    deck: Deck,
+    values: Mapping[str, Any],
+) -> None:
+    if not values:
+        raise ValueError("At least one deck setting is required")
+    validated: dict[str, int | float | bool | list[int]] = {}
+    for field, value in values.items():
+        if field not in DECK_SETTINGS_FIELDS:
+            raise ValueError(f"Unsupported deck setting: {field}")
+        parsed = validate_deck_setting_value(field, value)
+        if parsed is None:
+            raise ValueError(f"Invalid deck setting: {field}")
+        validated[field] = parsed
+    for field, value in validated.items():
+        setattr(deck, field, value)
     deck.option_preset = "custom"
     await session.commit()
 
@@ -343,6 +438,26 @@ async def apply_deck_preset(session: AsyncSession, deck: Deck, preset_name: str)
 async def rename_deck(session: AsyncSession, deck: Deck, name: str) -> None:
     deck.name = name.strip()
     await session.commit()
+
+
+async def rename_api_deck(session: AsyncSession, user: User, deck: Deck, name: str) -> None:
+    normalized_name = validate_api_deck_name(name)
+    parent_clause = Deck.parent_id.is_(None) if deck.parent_id is None else Deck.parent_id == deck.parent_id
+    result = await session.execute(
+        select(Deck.id).where(
+            Deck.user_id == user.id,
+            parent_clause,
+            Deck.name == normalized_name,
+            Deck.id != deck.id,
+        )
+    )
+    if result.scalar_one_or_none() is not None:
+        raise DeckNameConflictError("Deck name already exists")
+    try:
+        await rename_deck(session, deck, normalized_name)
+    except IntegrityError as exc:
+        await session.rollback()
+        raise DeckNameConflictError("Deck name already exists") from exc
 
 
 async def archive_deck(session: AsyncSession, deck: Deck) -> None:

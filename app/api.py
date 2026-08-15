@@ -1,7 +1,7 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,11 +10,22 @@ from app.deps import get_current_user, get_db_session
 from bot.models import User
 from bot.services.cards import card_answer_html, card_question_html, get_card, get_next_due_card
 from bot.services.decks import (
+    DECK_OPTION_PRESETS,
+    DeckNameConflictError,
+    apply_deck_preset,
+    archive_deck,
+    create_api_root_deck,
     deck_full_path,
     deck_list_with_counts,
+    get_any_deck,
     get_deck,
     get_deck_counts,
+    list_all_user_decks,
+    list_archived_deck_display_choices,
     list_user_decks,
+    rename_api_deck,
+    restore_deck,
+    update_deck_settings,
 )
 from bot.services.media import (
     extract_media_references,
@@ -38,6 +49,72 @@ class StudyAnswerRequest(BaseModel):
     card_id: int
     rating: int = Field(ge=1, le=4)
     elapsed_ms: int | None = None
+
+
+class DeckCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    description: str | None = None
+
+
+class DeckRenameRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+
+
+class DeckSettingsPatchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    new_cards_per_day: int | None = None
+    reviews_per_day: int | None = None
+    desired_retention: float | None = None
+    learning_steps_minutes: list[int] | None = None
+    relearning_steps_minutes: list[int] | None = None
+    maximum_interval_days: int | None = None
+    bury_siblings: bool | None = None
+    enable_fuzzing: bool | None = None
+
+
+class DeckPresetRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+
+
+async def deck_detail(session: AsyncSession, user: User, deck) -> dict:
+    decks_by_id = {item.id: item for item in await list_all_user_decks(session, user)}
+    new_count, learning_count, review_count = await get_deck_counts(session, deck)
+    return {
+        "id": deck.id,
+        "name": deck_full_path(deck, decks_by_id),
+        "description": deck.description,
+        "is_archived": deck.is_archived,
+        "settings": {
+            "new_cards_per_day": deck.new_cards_per_day,
+            "reviews_per_day": deck.reviews_per_day,
+            "desired_retention": deck.desired_retention,
+            "learning_steps_minutes": deck.learning_steps_minutes,
+            "relearning_steps_minutes": deck.relearning_steps_minutes,
+            "maximum_interval_days": deck.maximum_interval_days,
+            "bury_siblings": deck.bury_siblings,
+            "enable_fuzzing": deck.enable_fuzzing,
+            "option_preset": deck.option_preset,
+        },
+        "counts": {
+            "new": new_count,
+            "learning": learning_count,
+            "review": review_count,
+        },
+    }
+
+
+async def api_deck_or_404(session: AsyncSession, user: User, deck_id: int):
+    deck = await get_any_deck(session, user, deck_id)
+    if deck is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deck not found")
+    return deck
 
 
 @router.get("/stats/overview")
@@ -105,6 +182,116 @@ async def decks(
         }
         for deck_id, name, new_count, learning_count, review_count in rows
     ]
+
+
+@router.post("/decks", status_code=status.HTTP_201_CREATED)
+async def create_deck_endpoint(
+    payload: DeckCreateRequest,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> dict:
+    try:
+        deck = await create_api_root_deck(session, user, payload.name, payload.description)
+    except DeckNameConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    return await deck_detail(session, user, deck)
+
+
+@router.get("/decks/archived")
+async def archived_decks(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> list[dict]:
+    return [
+        {"id": deck_id, "name": name}
+        for deck_id, name in await list_archived_deck_display_choices(session, user)
+    ]
+
+
+@router.get("/decks/presets")
+async def deck_presets(user: Annotated[User, Depends(get_current_user)]) -> dict:
+    return DECK_OPTION_PRESETS
+
+
+@router.get("/decks/{deck_id}")
+async def get_deck_endpoint(
+    deck_id: int,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> dict:
+    deck = await api_deck_or_404(session, user, deck_id)
+    return await deck_detail(session, user, deck)
+
+
+@router.patch("/decks/{deck_id}")
+async def rename_deck_endpoint(
+    deck_id: int,
+    payload: DeckRenameRequest,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> dict:
+    deck = await api_deck_or_404(session, user, deck_id)
+    try:
+        await rename_api_deck(session, user, deck, payload.name)
+    except DeckNameConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    return await deck_detail(session, user, deck)
+
+
+@router.post("/decks/{deck_id}/archive")
+async def archive_deck_endpoint(
+    deck_id: int,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> dict:
+    deck = await api_deck_or_404(session, user, deck_id)
+    await archive_deck(session, deck)
+    return await deck_detail(session, user, deck)
+
+
+@router.post("/decks/{deck_id}/restore")
+async def restore_deck_endpoint(
+    deck_id: int,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> dict:
+    deck = await api_deck_or_404(session, user, deck_id)
+    await restore_deck(session, deck)
+    return await deck_detail(session, user, deck)
+
+
+@router.patch("/decks/{deck_id}/settings")
+async def update_deck_settings_endpoint(
+    deck_id: int,
+    payload: DeckSettingsPatchRequest,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> dict:
+    deck = await api_deck_or_404(session, user, deck_id)
+    try:
+        await update_deck_settings(session, deck, payload.model_dump(exclude_unset=True))
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    return await deck_detail(session, user, deck)
+
+
+@router.post("/decks/{deck_id}/preset")
+async def apply_deck_preset_endpoint(
+    deck_id: int,
+    payload: DeckPresetRequest,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> dict:
+    deck = await api_deck_or_404(session, user, deck_id)
+    try:
+        await apply_deck_preset(session, deck, payload.name)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    return await deck_detail(session, user, deck)
 
 
 @router.get("/study/next")

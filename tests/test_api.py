@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from urllib.parse import urlencode
 
 import httpx
+import pytest
 from sqlalchemy import select
 
 from app.deps import get_db_session
@@ -93,6 +94,20 @@ def post_request(
     return asyncio.run(send())
 
 
+def patch_request(
+    app,
+    path: str,
+    payload: dict,
+    headers: dict[str, str] | None = None,
+) -> httpx.Response:
+    async def send() -> httpx.Response:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            return await client.patch(path, json=payload, headers=headers)
+
+    return asyncio.run(send())
+
+
 def test_api_rejects_missing_init_data(session_factory, monkeypatch) -> None:
     response = request(build_app(session_factory, monkeypatch), "/api/me")
 
@@ -162,6 +177,130 @@ def test_api_lists_active_decks_with_counts(session_factory, monkeypatch) -> Non
     assert decks["Spanish::Verbs"]["new_count"] == 1
     assert decks["Spanish::Verbs"]["learning_count"] == 0
     assert decks["Spanish::Verbs"]["review_count"] == 0
+
+
+def test_api_manages_deck_lifecycle(session_factory, monkeypatch) -> None:
+    app = build_app(session_factory, monkeypatch)
+    headers = {"X-Telegram-Init-Data": signed_init_data()}
+
+    created = post_request(
+        app,
+        "/api/decks",
+        {"name": "Spanish", "description": "Practice vocabulary"},
+        headers,
+    )
+
+    assert created.status_code == 201
+    deck = created.json()
+    assert deck["name"] == "Spanish"
+    assert deck["description"] == "Practice vocabulary"
+    assert deck["is_archived"] is False
+    assert deck["counts"] == {"new": 0, "learning": 0, "review": 0}
+
+    details = request(app, f"/api/decks/{deck['id']}", headers)
+    renamed = patch_request(app, f"/api/decks/{deck['id']}", {"name": "Español"}, headers)
+    archived = post_request(app, f"/api/decks/{deck['id']}/archive", {}, headers)
+    active_decks = request(app, "/api/decks", headers)
+    archived_decks = request(app, "/api/decks/archived", headers)
+    restored = post_request(app, f"/api/decks/{deck['id']}/restore", {}, headers)
+
+    assert details.status_code == 200
+    assert renamed.status_code == 200
+    assert renamed.json()["name"] == "Español"
+    assert archived.status_code == 200
+    assert archived.json()["is_archived"] is True
+    assert active_decks.json() == []
+    assert archived_decks.json() == [{"id": deck["id"], "name": "Español"}]
+    assert restored.status_code == 200
+    assert restored.json()["is_archived"] is False
+    assert request(app, "/api/decks", headers).json()[0]["id"] == deck["id"]
+
+
+def test_api_rejects_invalid_or_duplicate_root_deck_names(session_factory, monkeypatch) -> None:
+    app = build_app(session_factory, monkeypatch)
+    headers = {"X-Telegram-Init-Data": signed_init_data()}
+
+    invalid_hierarchy = post_request(app, "/api/decks", {"name": "Languages::Spanish"}, headers)
+    invalid_empty = post_request(app, "/api/decks", {"name": "  "}, headers)
+    created = post_request(app, "/api/decks", {"name": "Spanish"}, headers)
+    duplicate = post_request(app, "/api/decks", {"name": "Spanish"}, headers)
+    invalid_rename = patch_request(
+        app, f"/api/decks/{created.json()['id']}", {"name": "Spanish::Verbs"}, headers
+    )
+
+    assert invalid_hierarchy.status_code == 422
+    assert invalid_empty.status_code == 422
+    assert created.status_code == 201
+    assert duplicate.status_code == 409
+    assert invalid_rename.status_code == 422
+
+
+def test_api_updates_deck_settings_and_applies_presets(session_factory, monkeypatch) -> None:
+    app = build_app(session_factory, monkeypatch)
+    headers = {"X-Telegram-Init-Data": signed_init_data()}
+    deck_id = post_request(app, "/api/decks", {"name": "Spanish"}, headers).json()["id"]
+
+    updated = patch_request(
+        app,
+        f"/api/decks/{deck_id}/settings",
+        {"new_cards_per_day": 123},
+        headers,
+    )
+    invalid_number = patch_request(
+        app,
+        f"/api/decks/{deck_id}/settings",
+        {"new_cards_per_day": 5001},
+        headers,
+    )
+    invalid_steps = patch_request(
+        app,
+        f"/api/decks/{deck_id}/settings",
+        {"learning_steps_minutes": [0]},
+        headers,
+    )
+    presets = request(app, "/api/decks/presets", headers)
+    applied = post_request(app, f"/api/decks/{deck_id}/preset", {"name": "intense"}, headers)
+
+    assert updated.status_code == 200
+    assert updated.json()["settings"]["new_cards_per_day"] == 123
+    assert updated.json()["settings"]["option_preset"] == "custom"
+    assert invalid_number.status_code == 422
+    assert invalid_steps.status_code == 422
+    assert presets.status_code == 200
+    assert set(presets.json()) == {"light", "balanced", "intense", "exam"}
+    assert applied.status_code == 200
+    assert applied.json()["settings"]["option_preset"] == "intense"
+    assert applied.json()["settings"]["new_cards_per_day"] == presets.json()["intense"]["new_cards_per_day"]
+
+
+@pytest.mark.parametrize(
+    ("method", "path_suffix", "payload"),
+    [
+        ("get", "", {}),
+        ("patch", "", {"name": "Other"}),
+        ("post", "/archive", {}),
+        ("post", "/restore", {}),
+        ("patch", "/settings", {"new_cards_per_day": 10}),
+        ("post", "/preset", {"name": "balanced"}),
+    ],
+)
+def test_api_deck_routes_hide_foreign_decks(
+    session_factory, monkeypatch, method: str, path_suffix: str, payload: dict
+) -> None:
+    app = build_app(session_factory, monkeypatch)
+    owner_headers = {"X-Telegram-Init-Data": signed_init_data()}
+    foreign_headers = {"X-Telegram-Init-Data": signed_init_data(telegram_id=987654)}
+    deck_id = post_request(app, "/api/decks", {"name": "Spanish"}, owner_headers).json()["id"]
+    path = f"/api/decks/{deck_id}{path_suffix}"
+
+    if method == "get":
+        response = request(app, path, foreign_headers)
+    elif method == "patch":
+        response = patch_request(app, path, payload, foreign_headers)
+    else:
+        response = post_request(app, path, payload, foreign_headers)
+
+    assert response.status_code == 404
 
 
 def test_healthz_does_not_require_authorization(session_factory, monkeypatch) -> None:
