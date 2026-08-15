@@ -84,6 +84,45 @@ export interface StudyDone {
   done_today: number;
 }
 
+export interface CardSearchItem {
+  card_id: number;
+  note_id: number;
+  deck_id: number;
+  deck_name: string;
+  preview: string;
+  state: string;
+  due: string;
+  suspended: boolean;
+  buried: boolean;
+  flag: CardFlag | null;
+}
+
+export interface CardSearchPage {
+  total: number;
+  items: CardSearchItem[];
+}
+
+export type CardFlag = "red" | "orange" | "green" | "blue" | "purple";
+
+export interface CardDetail {
+  card_id: number;
+  note_id: number;
+  deck_id: number;
+  deck_name: string;
+  question_html: string;
+  answer_html: string;
+  fields: Record<string, string>;
+  front: string;
+  back: string;
+  tags: string[];
+  state: string;
+  due: string;
+  lapses: number;
+  suspended: boolean;
+  buried_until: string | null;
+  flag: CardFlag | null;
+}
+
 export type NextCard = StudyCard | StudyDone;
 
 export class ApiError extends Error {
@@ -121,6 +160,51 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export function fetchDecks(): Promise<Deck[]> {
   return request<Deck[]>("/decks");
+}
+
+export function createCard(payload: {deck_id: number; front: string; back: string; tags?: string[]; reverse: boolean}): Promise<{note_id: number}> {
+  return request("/cards", {method: "POST", body: JSON.stringify(payload)});
+}
+
+export function searchCards(query: string, limit: number, offset: number): Promise<CardSearchPage> {
+  const params = new URLSearchParams({q: query, limit: String(limit), offset: String(offset)});
+  return request(`/cards/search?${params}`);
+}
+
+export function fetchCard(id: number): Promise<CardDetail> {
+  return request(`/cards/${id}`);
+}
+
+export function updateNote(id: number, payload: {front?: string; back?: string; tags?: string[]}): Promise<{ok: true}> {
+  return request(`/notes/${id}`, {method: "PATCH", body: JSON.stringify(payload)});
+}
+
+export async function deleteNote(id: number): Promise<void> {
+  const headers = new Headers({"X-Telegram-Init-Data": telegramInitData()});
+  const response = await fetch(`/api/notes/${id}`, {method: "DELETE", headers});
+  if (!response.ok) {
+    throw new ApiError(response.status);
+  }
+}
+
+export function setCardSuspended(id: number, value: boolean): Promise<{ok: true}> {
+  return request(`/cards/${id}/suspend`, {method: "POST", body: JSON.stringify({value})});
+}
+
+export function buryCard(id: number): Promise<{ok: true}> {
+  return request(`/cards/${id}/bury`, {method: "POST", body: JSON.stringify({})});
+}
+
+export function setCardFlag(id: number, color: CardFlag | null): Promise<{ok: true}> {
+  return request(`/cards/${id}/flag`, {method: "POST", body: JSON.stringify({color})});
+}
+
+export function resetCard(id: number): Promise<{ok: true}> {
+  return request(`/cards/${id}/reset`, {method: "POST", body: JSON.stringify({})});
+}
+
+export function setCardDue(id: number, date: string): Promise<{ok: true}> {
+  return request(`/cards/${id}/due`, {method: "POST", body: JSON.stringify({date})});
 }
 
 export function createDeck(name: string, description?: string): Promise<DeckDetail> {

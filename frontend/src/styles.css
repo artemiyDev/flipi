@@ -61,6 +61,7 @@ nav .active { color: var(--tg-button-color); }
 .deck-form, .settings-block { display: grid; gap: 12px; padding: 16px 0; border-bottom: 1px solid var(--tg-hint-color); }
 .deck-form label, .settings-field { display: grid; gap: 6px; font-size: 14px; }
 input, textarea { width: 100%; padding: 10px; border: 1px solid var(--tg-hint-color); border-radius: 8px; color: var(--tg-text-color); background: var(--tg-secondary-bg-color); font: inherit; }
+select { width: 100%; padding: 10px; border: 1px solid var(--tg-hint-color); border-radius: 8px; color: var(--tg-text-color); background: var(--tg-secondary-bg-color); font: inherit; }
 textarea { min-height: 72px; resize: vertical; }
 .form-actions { display: flex; gap: 8px; }
 .field-error { margin: -4px 0 0; color: #e8574d; font-size: 13px; }
@@ -80,4 +81,26 @@ textarea { min-height: 72px; resize: vertical; }
 .toggle { display: flex; align-items: center; gap: 8px; font-size: 14px; }
 .toggle input { width: auto; }
 .archive-button { width: 100%; margin-top: 20px; color: #e8574d; }
+.deck-actions { display: flex; gap: 8px; margin: 12px 0; }
+.deck-actions button { flex: 1; padding: 10px; border-radius: 8px; }
+.cards-screen { max-width: 640px; margin: 0 auto; }
+.cards-header { display: flex; gap: 10px; align-items: center; margin-bottom: 16px; }
+.cards-header h1 { margin: 0; font-size: 22px; overflow-wrap: anywhere; }
+.card-form { display: grid; gap: 12px; padding: 16px 0; }
+.card-form label, .card-actions label { display: grid; gap: 6px; font-size: 14px; }
+.cards-count { margin: 12px 0 4px; }
+.card-list { display: grid; }
+.card-row { display: grid; gap: 4px; width: 100%; padding: 14px 0; text-align: left; border-bottom: 1px solid var(--tg-hint-color); }
+.card-row small { color: var(--tg-hint-color); }
+.card-preview { overflow-wrap: anywhere; }
+.card-badges, .flag-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.card-badge, .card-state, .card-flag { padding: 2px 6px; border-radius: 9px; font-size: 11px; background: var(--tg-secondary-bg-color); }
+.state-new { color: #2481cc; }.state-learning, .state-relearning { color: #e8a33d; }.state-review { color: #4caf50; }
+.flag-red { color: #e8574d; }.flag-orange { color: #e8a33d; }.flag-green { color: #4caf50; }.flag-blue { color: #2481cc; }.flag-purple { color: #9b59b6; }
+.card-render { padding: 16px; background: var(--tg-secondary-bg-color); overflow-wrap: anywhere; }
+.card-render hr { border: 0; border-top: 1px solid var(--tg-hint-color); margin: 20px 0; }
+.card-render img, .card-render audio { max-width: 100%; display: block; margin: 12px auto; }
+.card-actions { display: grid; gap: 10px; padding-top: 16px; }
+.card-actions > button, .flag-actions button { padding: 10px; border-radius: 8px; }
+.delete-button { color: #e8574d; }
 @media (max-width: 420px) { .settings-grid { grid-template-columns: 1fr; } }

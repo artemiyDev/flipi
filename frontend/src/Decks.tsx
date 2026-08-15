@@ -166,10 +166,11 @@ function CreateDeckForm({onCreated, onClose, onUnauthorized}: {
   </form>;
 }
 
-export function Decks({onOpenDeck, onUnauthorized, createRequest}: {
+export function Decks({onOpenDeck, onUnauthorized, createRequest, onBrowseCards = () => undefined}: {
   onOpenDeck: (id: number) => void;
   onUnauthorized: () => void;
   createRequest: number;
+  onBrowseCards?: () => void;
 }): JSX.Element {
   const [decks, setDecks] = useState<Deck[] | null>(null);
   const [archived, setArchived] = useState<ArchivedDeck[] | null>(null);
@@ -216,7 +217,7 @@ export function Decks({onOpenDeck, onUnauthorized, createRequest}: {
   }
 
   return <section className="decks-management">
-    <button className="primary wide" onClick={() => setCreateOpen(true)}>Новая колода</button>
+    <div className="deck-actions"><button className="primary" onClick={() => setCreateOpen(true)}>Новая колода</button><button onClick={onBrowseCards}>Поиск карточек</button></div>
     {createOpen && <CreateDeckForm onClose={() => setCreateOpen(false)} onCreated={load} onUnauthorized={onUnauthorized} />}
     {decks.length === 0 ? <p className="hint">Пока нет колод</p> : <div className="deck-list">
       {decks.map((deck) => <button className="deck" key={deck.id} onClick={() => onOpenDeck(deck.id)}>
@@ -247,10 +248,12 @@ function SettingInput({label, field, values, setValues, errors, type = "number"}
   </label>;
 }
 
-export function DeckScreen({deckId, onBack, onUnauthorized}: {
+export function DeckScreen({deckId, onBack, onUnauthorized, onAddCard = () => undefined, onBrowseCards = () => undefined}: {
   deckId: number;
   onBack: () => void;
   onUnauthorized: () => void;
+  onAddCard?: (deckId: number) => void;
+  onBrowseCards?: (query: string) => void;
 }): JSX.Element {
   const [deck, setDeck] = useState<DeckDetail | null>(null);
   const [renameOpen, setRenameOpen] = useState(false);
@@ -365,6 +368,7 @@ export function DeckScreen({deckId, onBack, onUnauthorized}: {
       {nameError && <p className="field-error" role="alert">{nameError}</p>}
     </div><ProgressCounts counts={deck.counts} /></header>
     {!renameOpen && <button onClick={() => setRenameOpen(true)}>Переименовать</button>}
+    <div className="deck-actions"><button className="primary" onClick={() => onAddCard(deck.id)}>Добавить карточку</button><button onClick={() => onBrowseCards(`deck:\"${deck.name}\"`)}>Карточки</button></div>
 
     <section className="settings-block"><h2>Пресет</h2><div className="presets">
       {PRESETS.map(([key, label]) => <button className={deck.settings.option_preset === key ? "active" : ""} key={key} onClick={() => applyPreset(key)}>{label}</button>)}
