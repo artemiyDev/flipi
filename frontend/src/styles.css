@@ -8,7 +8,7 @@
 body { margin: 0; min-width: 320px; background: var(--tg-bg-color); color: var(--tg-text-color); }
 button { font: inherit; border: 0; cursor: pointer; color: var(--tg-text-color); background: var(--tg-secondary-bg-color); }
 main { min-height: 100vh; padding: 16px 16px 72px; }
-.decks, .session { max-width: 640px; margin: 0 auto; }
+.decks, .decks-management, .deck-screen, .session { max-width: 640px; margin: 0 auto; }
 .wide { width: 100%; }
 .primary { padding: 12px 16px; border-radius: 10px; background: var(--tg-button-color); color: var(--tg-button-text-color); }
 .deck-list { margin-top: 12px; }
@@ -19,7 +19,7 @@ main { min-height: 100vh; padding: 16px 16px 72px; }
 .count-review { color: #4caf50; }
 .hint { color: var(--tg-hint-color); }
 .centered { min-height: 60vh; display: grid; place-items: center; text-align: center; }
-nav { position: fixed; bottom: 0; left: 0; right: 0; display: grid; grid-template-columns: 1fr 1fr; padding: 8px; background: var(--tg-secondary-bg-color); }
+nav { position: fixed; bottom: 0; left: 0; right: 0; display: grid; grid-template-columns: repeat(3, 1fr); padding: 8px; background: var(--tg-secondary-bg-color); }
 nav button { padding: 10px; }
 nav .active { color: var(--tg-button-color); }
 .session-header { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; margin-bottom: 24px; }
@@ -58,3 +58,26 @@ nav .active { color: var(--tg-button-color); }
 .rating-hard { background: #e8a33d; }
 .rating-good { background: #4caf50; }
 .rating-easy { background: #2481cc; }
+.deck-form, .settings-block { display: grid; gap: 12px; padding: 16px 0; border-bottom: 1px solid var(--tg-hint-color); }
+.deck-form label, .settings-field { display: grid; gap: 6px; font-size: 14px; }
+input, textarea { width: 100%; padding: 10px; border: 1px solid var(--tg-hint-color); border-radius: 8px; color: var(--tg-text-color); background: var(--tg-secondary-bg-color); font: inherit; }
+textarea { min-height: 72px; resize: vertical; }
+.form-actions { display: flex; gap: 8px; }
+.field-error { margin: -4px 0 0; color: #e8574d; font-size: 13px; }
+.archive-section { margin-top: 28px; border-top: 1px solid var(--tg-hint-color); }
+.archive-toggle { width: 100%; padding: 14px 0; text-align: left; }
+.archive-list { display: grid; gap: 8px; padding-bottom: 12px; }
+.archive-deck { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.archive-deck button, .deck-screen > button { padding: 9px 12px; border-radius: 8px; }
+.deck-header { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; margin-bottom: 14px; }
+.deck-header h1 { margin: 0; font-size: 22px; overflow-wrap: anywhere; }
+.rename-form { display: flex; gap: 8px; }
+.rename-form input { min-width: 0; }
+.presets { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+.presets button { padding: 10px; border-radius: 8px; }
+.presets .active { color: var(--tg-button-text-color); background: var(--tg-button-color); }
+.settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.toggle { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.toggle input { width: auto; }
+.archive-button { width: 100%; margin-top: 20px; color: #e8574d; }
+@media (max-width: 420px) { .settings-grid { grid-template-columns: 1fr; } }

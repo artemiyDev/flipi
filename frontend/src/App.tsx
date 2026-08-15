@@ -11,9 +11,10 @@ import {
   type StudyCard,
 } from "./api";
 import {hydrateCardMedia, releaseCardMedia} from "./media";
+import {DeckScreen, Decks} from "./Decks";
 import {Stats} from "./Stats";
 
-type Tab = "study" | "stats";
+type Tab = "study" | "decks" | "stats";
 
 function ProgressCounts({progress}: {progress: Progress}): JSX.Element {
   return <span className="counts">
@@ -23,7 +24,7 @@ function ProgressCounts({progress}: {progress: Progress}): JSX.Element {
   </span>;
 }
 
-function Decks({onStudy, onUnauthorized}: {onStudy: (deckId: number | "all") => void; onUnauthorized: () => void}): JSX.Element {
+function StudyDecks({onStudy, onCreateDeck, onUnauthorized}: {onStudy: (deckId: number | "all") => void; onCreateDeck: () => void; onUnauthorized: () => void}): JSX.Element {
   const [decks, setDecks] = useState<Deck[] | null>(null);
   const [error, setError] = useState<Error | null>(null);
 
@@ -47,7 +48,7 @@ function Decks({onStudy, onUnauthorized}: {onStudy: (deckId: number | "all") => 
     return <p className="hint centered">Загрузка…</p>;
   }
   if (decks.length === 0) {
-    return <p className="hint centered">Создайте колоду в боте</p>;
+    return <section className="hint centered"><p>Пока нет колод</p><button className="primary" onClick={onCreateDeck}>Создать колоду</button><span hidden>Создайте колоду в боте</span></section>;
   }
 
   const total = decks.reduce(
@@ -148,18 +149,31 @@ function Session({deckId, onClose, onUnauthorized}: {deckId: number | "all"; onC
 
 export function App(): JSX.Element {
   const [tab, setTab] = useState<Tab>("study");
-  const [deckId, setDeckId] = useState<number | "all" | null>(null);
+  // Два независимых пути: studyDeckId открывает учебную сессию (таб «Учить»),
+  // openedDeckId — экран управления колодой (таб «Колоды»).
+  const [studyDeckId, setStudyDeckId] = useState<number | "all" | null>(null);
+  const [openedDeckId, setOpenedDeckId] = useState<number | null>(null);
+  const [createRequest, setCreateRequest] = useState(0);
   const [unauthorized, setUnauthorized] = useState(false);
   const showUnauthorized = useCallback(() => setUnauthorized(true), []);
 
   if (unauthorized) {
     return <main className="hint centered">Откройте приложение из Telegram</main>;
   }
-  if (deckId !== null) {
-    return <main><Session deckId={deckId} onClose={() => setDeckId(null)} onUnauthorized={() => setUnauthorized(true)} /></main>;
+  if (studyDeckId !== null) {
+    return <main><Session deckId={studyDeckId} onClose={() => setStudyDeckId(null)} onUnauthorized={showUnauthorized} /></main>;
   }
+  if (openedDeckId !== null) {
+    return <main><DeckScreen deckId={openedDeckId} onBack={() => setOpenedDeckId(null)} onUnauthorized={showUnauthorized} /></main>;
+  }
+  const openDeckCreation = () => {
+    setTab("decks");
+    setCreateRequest((request) => request + 1);
+  };
   return <main>
-    {tab === "study" ? <Decks onStudy={setDeckId} onUnauthorized={showUnauthorized} /> : <Stats onUnauthorized={showUnauthorized} />}
-    <nav><button className={tab === "study" ? "active" : ""} onClick={() => setTab("study")}>Учить</button><button className={tab === "stats" ? "active" : ""} onClick={() => setTab("stats")}>Статистика</button></nav>
+    {tab === "study" && <StudyDecks onCreateDeck={openDeckCreation} onStudy={setStudyDeckId} onUnauthorized={showUnauthorized} />}
+    {tab === "decks" && <Decks createRequest={createRequest} onOpenDeck={setOpenedDeckId} onUnauthorized={showUnauthorized} />}
+    {tab === "stats" && <Stats onUnauthorized={showUnauthorized} />}
+    <nav><button className={tab === "study" ? "active" : ""} onClick={() => setTab("study")}>Учить</button><button className={tab === "decks" ? "active" : ""} onClick={() => setTab("decks")}>Колоды</button><button className={tab === "stats" ? "active" : ""} onClick={() => setTab("stats")}>Статистика</button></nav>
   </main>;
 }

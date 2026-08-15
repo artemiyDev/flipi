@@ -6,6 +6,34 @@ export interface Deck {
   review_count: number;
 }
 
+export interface DeckSettings {
+  new_cards_per_day: number;
+  reviews_per_day: number;
+  desired_retention: number;
+  learning_steps_minutes: number[];
+  relearning_steps_minutes: number[];
+  maximum_interval_days: number;
+  bury_siblings: boolean;
+  enable_fuzzing: boolean;
+  option_preset: string;
+}
+
+export interface DeckDetail {
+  id: number;
+  name: string;
+  description: string | null;
+  is_archived: boolean;
+  settings: DeckSettings;
+  counts: Progress;
+}
+
+export interface ArchivedDeck {
+  id: number;
+  name: string;
+}
+
+export type DeckSettingsPatch = Partial<Omit<DeckSettings, "option_preset">>;
+
 export interface Progress {
   new: number;
   learning: number;
@@ -59,7 +87,7 @@ export interface StudyDone {
 export type NextCard = StudyCard | StudyDone;
 
 export class ApiError extends Error {
-  constructor(public readonly status: number) {
+  constructor(public readonly status: number, public readonly detail?: string) {
     super(`API request failed with status ${status}`);
   }
 }
@@ -77,13 +105,54 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   const response = await fetch(`/api${path}`, {...init, headers});
   if (!response.ok) {
-    throw new ApiError(response.status);
+    let detail: string | undefined;
+    try {
+      const body: unknown = await response.json();
+      if (typeof body === "object" && body !== null && "detail" in body && typeof body.detail === "string") {
+        detail = body.detail;
+      }
+    } catch {
+      // Error responses without a JSON body do not provide a user-facing detail.
+    }
+    throw new ApiError(response.status, detail);
   }
   return response.json() as Promise<T>;
 }
 
 export function fetchDecks(): Promise<Deck[]> {
   return request<Deck[]>("/decks");
+}
+
+export function createDeck(name: string, description?: string): Promise<DeckDetail> {
+  return request("/decks", {method: "POST", body: JSON.stringify({name, ...(description ? {description} : {})})});
+}
+
+export function fetchDeck(id: number): Promise<DeckDetail> {
+  return request(`/decks/${id}`);
+}
+
+export function renameDeck(id: number, name: string): Promise<DeckDetail> {
+  return request(`/decks/${id}`, {method: "PATCH", body: JSON.stringify({name})});
+}
+
+export function fetchArchivedDecks(): Promise<ArchivedDeck[]> {
+  return request("/decks/archived");
+}
+
+export function archiveDeck(id: number): Promise<DeckDetail> {
+  return request(`/decks/${id}/archive`, {method: "POST", body: JSON.stringify({})});
+}
+
+export function restoreDeck(id: number): Promise<DeckDetail> {
+  return request(`/decks/${id}/restore`, {method: "POST", body: JSON.stringify({})});
+}
+
+export function updateDeckSettings(id: number, settings: DeckSettingsPatch): Promise<DeckDetail> {
+  return request(`/decks/${id}/settings`, {method: "PATCH", body: JSON.stringify(settings)});
+}
+
+export function applyDeckPreset(id: number, name: string): Promise<DeckDetail> {
+  return request(`/decks/${id}/preset`, {method: "POST", body: JSON.stringify({name})});
 }
 
 export function fetchNextCard(deckId: number | "all"): Promise<NextCard> {
