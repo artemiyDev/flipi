@@ -36,6 +36,11 @@ class User(Base):
     full_name: Mapped[str | None] = mapped_column(String(255))
     language_code: Mapped[str | None] = mapped_column(String(16))
     timezone: Mapped[str] = mapped_column(String(64), default="UTC")
+    reminder_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    reminder_minutes_local: Mapped[int | None] = mapped_column(Integer)
+    reminder_snoozed_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reminder_skip_date: Mapped[date | None] = mapped_column(Date)
+    reminder_last_sent_date: Mapped[date | None] = mapped_column(Date)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     decks: Mapped[list["Deck"]] = relationship(back_populates="user")

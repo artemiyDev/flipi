@@ -23,10 +23,14 @@ def user_day_start_utc(timezone_name: str | None, day: date | None = None) -> da
 
 
 def user_local_date(value: datetime, timezone_name: str | None) -> date:
+    return user_local_datetime(value, timezone_name).date()
+
+
+def user_local_datetime(value: datetime, timezone_name: str | None) -> datetime:
     zone = _zone(timezone_name)
     if value.tzinfo is None:
         value = value.replace(tzinfo=UTC)
-    return value.astimezone(zone).date()
+    return value.astimezone(zone)
 
 
 def _zone(timezone_name: str | None) -> ZoneInfo:

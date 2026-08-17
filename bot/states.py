@@ -39,6 +39,10 @@ class EditUserTimezone(StatesGroup):
     value = State()
 
 
+class EditReminderTime(StatesGroup):
+    value = State()
+
+
 class EditDeck(StatesGroup):
     name = State()
 

@@ -1,7 +1,6 @@
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery
-from aiogram.types import Message
+from aiogram.types import CallbackQuery, Message
 from zoneinfo import ZoneInfoNotFoundError
 
 from bot.db import async_session
@@ -10,6 +9,7 @@ from bot.keyboards import (
     choose_deck,
     deck_preset_options,
     deck_settings,
+    reminder_settings,
     settings_root,
 )
 from bot.services.decks import (
@@ -24,8 +24,13 @@ from bot.services.decks import (
     update_deck_setting,
 )
 from bot.services.stats import daily_review_counts, user_stats
-from bot.services.users import get_or_create_user, update_user_timezone
-from bot.states import EditDeckSetting, EditUserTimezone
+from bot.services.users import (
+    get_or_create_user,
+    toggle_reminders,
+    update_reminder_time,
+    update_user_timezone,
+)
+from bot.states import EditDeckSetting, EditReminderTime, EditUserTimezone
 
 router = Router()
 
@@ -88,6 +93,66 @@ async def edit_timezone_finish(message: Message, state: FSMContext) -> None:
     await message.answer(
         f"Timezone сохранён: {timezone_name}",
         reply_markup=settings_root(timezone_name, bool(decks)),
+    )
+
+
+@router.callback_query(F.data == "settings:reminders")
+async def reminders_menu(callback: CallbackQuery) -> None:
+    await callback.answer()
+    if callback.from_user is None or callback.message is None:
+        return
+    async with async_session() as session:
+        user = await get_or_create_user(session, callback.from_user)
+        text = _reminder_settings_text(user.reminder_enabled, user.reminder_minutes_local)
+    await callback.message.answer(text, reply_markup=reminder_settings(user.reminder_enabled))
+
+
+@router.callback_query(F.data == "reminder:toggle")
+async def toggle_reminder_setting(callback: CallbackQuery) -> None:
+    await callback.answer()
+    if callback.from_user is None or callback.message is None:
+        return
+    async with async_session() as session:
+        user = await get_or_create_user(session, callback.from_user)
+        enabled = await toggle_reminders(session, user)
+        minutes = user.reminder_minutes_local
+    if enabled:
+        await callback.message.answer(
+            "Напомню, только если есть карточки к повторению и вы ещё не занимались в этот день.",
+            reply_markup=reminder_settings(True),
+        )
+        return
+    await callback.message.answer(
+        _reminder_settings_text(False, minutes),
+        reply_markup=reminder_settings(False),
+    )
+
+
+@router.callback_query(F.data == "reminder:time")
+async def edit_reminder_time_start(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    if callback.message is None:
+        return
+    await state.set_state(EditReminderTime.value)
+    await callback.message.answer("Введите время напоминания в формате ЧЧ:ММ, например 20:00.")
+
+
+@router.message(EditReminderTime.value)
+async def edit_reminder_time_finish(message: Message, state: FSMContext) -> None:
+    if message.from_user is None:
+        return
+    minutes = _parse_reminder_time(message.text or "")
+    if minutes is None:
+        await message.answer("Введите время в формате ЧЧ:ММ, например 20:00.")
+        return
+    async with async_session() as session:
+        user = await get_or_create_user(session, message.from_user)
+        await update_reminder_time(session, user, minutes)
+        enabled = user.reminder_enabled
+    await state.clear()
+    await message.answer(
+        _reminder_settings_text(enabled, minutes),
+        reply_markup=reminder_settings(enabled),
     )
 
 
@@ -287,3 +352,20 @@ def _format_day_count(day, count: int) -> str:
 
 def _format_steps(values: list[int] | None) -> str:
     return ",".join(str(value) for value in (values or []))
+
+
+def _parse_reminder_time(raw: str) -> int | None:
+    parts = raw.strip().split(":")
+    if len(parts) != 2 or not all(part.isdigit() and len(part) == 2 for part in parts):
+        return None
+    hour, minute = (int(part) for part in parts)
+    if hour > 23 or minute > 59:
+        return None
+    return hour * 60 + minute
+
+
+def _reminder_settings_text(enabled: bool, minutes_local: int | None) -> str:
+    if not enabled or minutes_local is None:
+        return "Напоминания: Выключены"
+    hour, minute = divmod(minutes_local, 60)
+    return f"Напоминания: Каждый день в {hour:02d}:{minute:02d}"

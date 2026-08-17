@@ -145,7 +145,7 @@ async def stats_overview(session: AsyncSession, user: User) -> dict:
     return {
         "due_now": due_now,
         "done_today": await count_done_today(session, user),
-        "streak_days": await _streak_days(session, user, today),
+        "streak_days": await streak_days(session, user, today),
         "retention_30d": successful_reviews / total_reviews if total_reviews else None,
         "ratings_30d": rating_counts,
     }
@@ -205,7 +205,7 @@ async def forecast_due_counts(
     return int(overdue_result.scalar_one()), sorted(counts.items())
 
 
-async def _streak_days(session: AsyncSession, user: User, today: date) -> int:
+async def streak_days(session: AsyncSession, user: User, today: date) -> int:
     reviewed_at_result = await session.execute(
         select(ReviewLog.reviewed_at).where(ReviewLog.user_id == user.id)
     )

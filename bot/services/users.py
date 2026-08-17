@@ -1,3 +1,4 @@
+from datetime import UTC, date, datetime, timedelta
 from typing import Protocol
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -45,4 +46,28 @@ async def get_or_create_user(session: AsyncSession, tg_user: TelegramUser) -> Us
 
 async def update_user_timezone(session: AsyncSession, user: User, timezone_name: str) -> None:
     user.timezone = normalize_timezone(timezone_name)
+    await session.commit()
+
+
+async def toggle_reminders(session: AsyncSession, user: User) -> bool:
+    user.reminder_enabled = not user.reminder_enabled
+    if user.reminder_enabled and user.reminder_minutes_local is None:
+        user.reminder_minutes_local = 20 * 60
+    await session.commit()
+    return user.reminder_enabled
+
+
+async def update_reminder_time(session: AsyncSession, user: User, minutes_local: int) -> None:
+    user.reminder_minutes_local = minutes_local
+    await session.commit()
+
+
+async def snooze_reminder(session: AsyncSession, user: User, now_utc: datetime) -> None:
+    user.reminder_snoozed_until = now_utc.astimezone(UTC) + timedelta(hours=2)
+    user.reminder_last_sent_date = None
+    await session.commit()
+
+
+async def skip_reminder_today(session: AsyncSession, user: User, local_today: date) -> None:
+    user.reminder_skip_date = local_today
     await session.commit()

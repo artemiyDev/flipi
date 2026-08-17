@@ -1,4 +1,5 @@
 import re
+from datetime import datetime
 
 import nh3
 from sqlalchemy import func, select
@@ -12,7 +13,7 @@ from bot.services.cards import (
 )
 from bot.services.decks import list_user_decks
 from bot.services.scheduler import review_with_fsrs
-from bot.services.timezones import user_day_start_utc
+from bot.services.timezones import user_day_start_utc, user_local_date
 
 HTML_TAGS = {
     "b",
@@ -83,11 +84,16 @@ async def answer_card(
     return card
 
 
-async def count_done_today(session: AsyncSession, user: User) -> int:
+async def count_done_today(
+    session: AsyncSession,
+    user: User,
+    now_utc: datetime | None = None,
+) -> int:
+    today = user_local_date(now_utc, user.timezone) if now_utc is not None else None
     result = await session.execute(
         select(func.count(ReviewLog.id)).where(
             ReviewLog.user_id == user.id,
-            ReviewLog.reviewed_at >= user_day_start_utc(user.timezone),
+            ReviewLog.reviewed_at >= user_day_start_utc(user.timezone, today),
         )
     )
     return int(result.scalar_one())

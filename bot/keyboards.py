@@ -246,8 +246,33 @@ def deck_preset_options(deck_id: int, current_preset: str) -> InlineKeyboardMark
 def settings_root(timezone: str, has_decks: bool) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text=f"Timezone: {timezone}", callback_data="settings:timezone")
+    builder.button(text="Напоминания", callback_data="settings:reminders")
     if has_decks:
         builder.button(text="Настройки колод", callback_data="settings:decks")
     builder.button(text="В меню", callback_data="menu:main")
     builder.adjust(1)
+    return builder.as_markup()
+
+
+def reminder_settings(enabled: bool) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="Выключить" if enabled else "Включить",
+        callback_data="reminder:toggle",
+    )
+    builder.button(text="Изменить время", callback_data="reminder:time")
+    builder.button(text="К настройкам", callback_data="settings:menu")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def reminder_actions(web_app_url: str) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    if web_app_url:
+        builder.button(text="Учить сейчас", web_app=WebAppInfo(url=web_app_url))
+    else:
+        builder.button(text="Учить сейчас", callback_data="menu:main")
+    builder.button(text="Через 2 часа", callback_data="reminder:snooze")
+    builder.button(text="Сегодня не надо", callback_data="reminder:skip")
+    builder.adjust(1, 2)
     return builder.as_markup()

@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from contextlib import suppress
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -8,9 +9,10 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand
 
 from bot.config import get_settings
-from bot.db import init_db
-from bot.handlers import backups, browse, cards, common, decks, errors, import_cards, settings, study
+from bot.db import async_session, init_db
+from bot.handlers import backups, browse, cards, common, decks, errors, import_cards, reminders, settings, study
 from bot.middlewares.throttling import ThrottlingMiddleware
+from bot.services.reminders import run_reminder_loop
 
 
 async def main() -> None:
@@ -41,10 +43,19 @@ async def main() -> None:
         browse.router,
         backups.router,
         settings.router,
+        reminders.router,
         errors.router,
     )
     await setup_bot_commands(bot)
-    await dispatcher.start_polling(bot)
+    reminder_task = asyncio.create_task(
+        run_reminder_loop(bot, async_session, settings_obj.web_app_url)
+    )
+    try:
+        await dispatcher.start_polling(bot)
+    finally:
+        reminder_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await reminder_task
 
 
 async def setup_bot_commands(bot: Bot) -> None:
