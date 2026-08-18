@@ -10,6 +10,7 @@ import {
   fetchDecks,
   renameDeck,
   restoreDeck,
+  shareDeck,
   updateDeckSettings,
   type ArchivedDeck,
   type Deck,
@@ -265,6 +266,7 @@ export function DeckScreen({deckId, onBack, onUnauthorized, onAddCard = () => un
   const [values, setValues] = useState<SettingsFormValues | null>(null);
   const [settingErrors, setSettingErrors] = useState<Partial<Record<SettingField, string>>>({});
   const [error, setError] = useState<Error | null>(null);
+  const [shareHint, setShareHint] = useState<string | null>(null);
 
   const load = useCallback(() => {
     setError(null);
@@ -358,6 +360,35 @@ export function DeckScreen({deckId, onBack, onUnauthorized, onAddCard = () => un
     });
   };
 
+  const share = () => {
+    if (!deck) {
+      return;
+    }
+    setShareHint(null);
+    shareDeck(deck.id).then(({link}) => {
+      if (!link) {
+        setShareHint("Шаринг недоступен");
+        return;
+      }
+      const telegram = window.Telegram?.WebApp;
+      if (!telegram) {
+        setShareHint("Шаринг недоступен");
+        return;
+      }
+      telegram.openTelegramLink(
+        `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(`Колода «${deck.name}» в Flipi`)}`,
+      );
+    }).catch((requestError: unknown) => {
+      if (isUnauthorized(requestError)) {
+        onUnauthorized();
+      } else if (requestError instanceof ApiError && requestError.status === 409) {
+        setShareHint("Восстановите колоду, чтобы поделиться");
+      } else {
+        setShareHint("Не удалось поделиться колодой");
+      }
+    });
+  };
+
   if (error) {
     return <p className="hint centered">{error.message}</p>;
   }
@@ -371,7 +402,8 @@ export function DeckScreen({deckId, onBack, onUnauthorized, onAddCard = () => un
       {nameError && <p className="field-error" role="alert">{nameError}</p>}
     </div><ProgressCounts counts={deck.counts} /></header>
     {!renameOpen && <button onClick={() => setRenameOpen(true)}>Переименовать</button>}
-    <div className="deck-actions"><button className="primary" onClick={() => onAddCard(deck.id)}>Добавить карточку</button><button onClick={() => onBrowseCards(`deck:\"${deck.name}\"`)}>Карточки</button><button onClick={() => onImport(deck.id)}>Импортировать файл</button></div>
+    <div className="deck-actions"><button className="primary" onClick={() => onAddCard(deck.id)}>Добавить карточку</button><button onClick={() => onBrowseCards(`deck:\"${deck.name}\"`)}>Карточки</button><button onClick={() => onImport(deck.id)}>Импортировать файл</button><button onClick={share}>Поделиться</button></div>
+    {shareHint && <p className="hint" role="status">{shareHint}</p>}
 
     <section className="settings-block"><h2>Пресет</h2><div className="presets">
       {PRESETS.map(([key, label]) => <button className={deck.settings.option_preset === key ? "active" : ""} key={key} onClick={() => applyPreset(key)}>{label}</button>)}

@@ -17,6 +17,7 @@ import {ImportScreen} from "./Import";
 import {Stats} from "./Stats";
 import {Catalog} from "./Catalog";
 import {Help} from "./Help";
+import {ShareInstallScreen} from "./Share";
 
 type Tab = "study" | "decks" | "stats";
 
@@ -138,12 +139,22 @@ export function App(): JSX.Element {
   const [importDeckId, setImportDeckId] = useState<number | null>(null);
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [shareToken, setShareToken] = useState<string | null>(() => new URLSearchParams(window.location.search).get("share"));
   const [createRequest, setCreateRequest] = useState(0);
   const [unauthorized, setUnauthorized] = useState(false);
   const showUnauthorized = useCallback(() => setUnauthorized(true), []);
+  const closeShareScreen = useCallback(() => {
+    const url = new URL(window.location.href);
+    url.searchParams.delete("share");
+    window.history.replaceState(window.history.state, "", url);
+    setShareToken(null);
+  }, []);
 
   if (unauthorized) {
     return <main className="hint centered">Откройте приложение из Telegram</main>;
+  }
+  if (shareToken) {
+    return <main><ShareInstallScreen onClose={closeShareScreen} onStudy={(deckId) => { closeShareScreen(); setStudyDeckId(deckId); }} onUnauthorized={showUnauthorized} token={shareToken} /></main>;
   }
   if (studyDeckId !== null) {
     return <main><Session deckId={studyDeckId} onClose={() => setStudyDeckId(null)} onUnauthorized={showUnauthorized} /></main>;

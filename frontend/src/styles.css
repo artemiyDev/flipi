@@ -8,7 +8,7 @@
 body { margin: 0; min-width: 320px; background: var(--tg-bg-color); color: var(--tg-text-color); }
 button { font: inherit; border: 0; cursor: pointer; color: var(--tg-text-color); background: var(--tg-secondary-bg-color); }
 main { min-height: 100vh; padding: 16px 16px 72px; }
-.decks, .decks-management, .deck-screen, .session, .import-screen, .catalog-screen, .help-screen { max-width: 640px; margin: 0 auto; }
+.decks, .decks-management, .deck-screen, .session, .import-screen, .catalog-screen, .help-screen, .share-screen { max-width: 640px; margin: 0 auto; }
 .wide { width: 100%; }
 .primary { padding: 12px 16px; border-radius: 10px; background: var(--tg-button-color); color: var(--tg-button-text-color); }
 .deck-list { margin-top: 12px; }
@@ -130,6 +130,12 @@ textarea { min-height: 72px; resize: vertical; }
 .catalog-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
 .catalog-tags span { padding: 2px 6px; border-radius: 9px; font-size: 11px; background: var(--tg-bg-color); }
 .catalog-notice { padding: 10px 12px; border-radius: 8px; color: var(--tg-button-text-color); background: var(--tg-button-color); }
+.share-screen { display: grid; gap: 14px; padding-top: 32px; }
+.share-screen h1, .share-screen p { margin: 0; }
+.share-success { color: var(--tg-button-color); font-size: 20px; }
+.share-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.share-actions button { padding: 12px 16px; border-radius: 10px; }
+.share-actions button:disabled { opacity: .7; cursor: default; }
 .help-screen details { padding: 14px 0; border-bottom: 1px solid var(--tg-hint-color); }
 .help-screen summary { cursor: pointer; font-weight: bold; }
 .help-screen p, .help-screen li { line-height: 1.45; }

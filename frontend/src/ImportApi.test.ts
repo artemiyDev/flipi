@@ -4,7 +4,7 @@ import {importFile} from "./api";
 
 describe("import API client", () => {
   beforeEach(() => {
-    window.Telegram = {WebApp: {initData: "signed-data", ready: vi.fn(), expand: vi.fn(), themeParams: {}, onEvent: vi.fn(), colorScheme: "light"}};
+    window.Telegram = {WebApp: {initData: "signed-data", ready: vi.fn(), expand: vi.fn(), openTelegramLink: vi.fn(), themeParams: {}, onEvent: vi.fn(), colorScheme: "light"}};
     vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(new Response(JSON.stringify({added: 1, updated: 2, unchanged: 3, decks_created: [], media_saved: 4}), {status: 200}))));
   });
 

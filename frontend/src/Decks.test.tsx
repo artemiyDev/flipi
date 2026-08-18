@@ -13,6 +13,7 @@ const apiMocks = vi.hoisted(() => ({
   fetchDecks: vi.fn(),
   renameDeck: vi.fn(),
   restoreDeck: vi.fn(),
+  shareDeck: vi.fn(),
   updateDeckSettings: vi.fn(),
 }));
 
@@ -51,6 +52,7 @@ describe("deck management", () => {
     apiMocks.applyDeckPreset.mockResolvedValue(detail);
     apiMocks.archiveDeck.mockResolvedValue({...detail, is_archived: true});
     apiMocks.restoreDeck.mockResolvedValue({...detail, is_archived: false});
+    apiMocks.shareDeck.mockResolvedValue({token: "token", link: "https://t.me/flipi?startapp=share-token"});
   });
 
   it("creates a deck and shows a duplicate-name error beside the field", async () => {
@@ -112,6 +114,34 @@ describe("deck management", () => {
     fireEvent.click(await screen.findByText("Архив (1)"));
     fireEvent.click(await screen.findByText("Восстановить"));
     await waitFor(() => expect(apiMocks.restoreDeck).toHaveBeenCalledWith(7));
+  });
+
+  it("opens Telegram sharing with an encoded deck link", async () => {
+    const openTelegramLink = vi.fn();
+    window.Telegram = {WebApp: {initData: "", ready: vi.fn(), expand: vi.fn(), openTelegramLink, themeParams: {}, onEvent: vi.fn(), colorScheme: "light"}};
+    render(<DeckScreen deckId={7} onBack={vi.fn()} onUnauthorized={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", {name: "Поделиться"}));
+
+    await waitFor(() => expect(apiMocks.shareDeck).toHaveBeenCalledWith(7));
+    expect(openTelegramLink).toHaveBeenCalledWith(
+      "https://t.me/share/url?url=https%3A%2F%2Ft.me%2Fflipi%3Fstartapp%3Dshare-token&text=%D0%9A%D0%BE%D0%BB%D0%BE%D0%B4%D0%B0%20%C2%ABSpanish%C2%BB%20%D0%B2%20Flipi",
+    );
+  });
+
+  it("shows a hint when sharing is unavailable", async () => {
+    apiMocks.shareDeck.mockResolvedValueOnce({token: "token", link: null});
+    render(<DeckScreen deckId={7} onBack={vi.fn()} onUnauthorized={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", {name: "Поделиться"}));
+
+    expect(await screen.findByRole("status")).toHaveTextContent("Шаринг недоступен");
+  });
+
+  it("explains how to share an archived deck", async () => {
+    apiMocks.shareDeck.mockRejectedValueOnce(new ApiError(409));
+    render(<DeckScreen deckId={7} onBack={vi.fn()} onUnauthorized={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", {name: "Поделиться"}));
+
+    expect(await screen.findByRole("status")).toHaveTextContent("Восстановите колоду, чтобы поделиться");
   });
 });
 

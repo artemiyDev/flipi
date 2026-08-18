@@ -144,6 +144,15 @@ export interface CatalogDeck {
   installed: boolean;
 }
 
+export interface SharedDeckPreview {
+  title: string;
+  description: string | null;
+  cards_count: number;
+  author: string;
+  installed: boolean;
+  own: boolean;
+}
+
 export type NextCard = StudyCard | StudyDone;
 
 export class ApiError extends Error {
@@ -273,6 +282,18 @@ export function updateDeckSettings(id: number, settings: DeckSettingsPatch): Pro
 
 export function applyDeckPreset(id: number, name: string): Promise<DeckDetail> {
   return request(`/decks/${id}/preset`, {method: "POST", body: JSON.stringify({name})});
+}
+
+export function shareDeck(id: number): Promise<{token: string; link: string | null}> {
+  return request(`/decks/${id}/share`, {method: "POST", body: JSON.stringify({})});
+}
+
+export function fetchSharedDeck(token: string): Promise<SharedDeckPreview> {
+  return request(`/share/${encodeURIComponent(token)}`);
+}
+
+export function installSharedDeck(token: string): Promise<{deck_id: number; added: number}> {
+  return request(`/share/${encodeURIComponent(token)}/install`, {method: "POST", body: JSON.stringify({})});
 }
 
 export function fetchNextCard(deckId: number | "all"): Promise<NextCard> {
