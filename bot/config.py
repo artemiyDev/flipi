@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     auto_create_tables: bool = Field(default=False, alias="AUTO_CREATE_TABLES")
     auth_max_age_seconds: int = Field(default=86400, alias="AUTH_MAX_AGE_SECONDS")
     web_app_url: str = Field(default="", alias="WEB_APP_URL")
+    bot_username: str = Field(default="", alias="BOT_USERNAME")
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 

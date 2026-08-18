@@ -118,6 +118,20 @@ class SharedDeck(Base):
     )
 
 
+class DeckShare(Base):
+    __tablename__ = "deck_shares"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    deck_id: Mapped[int] = mapped_column(
+        ForeignKey("decks.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    owner_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    token: Mapped[str] = mapped_column(String(43), unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class Note(Base):
     __tablename__ = "notes"
     __table_args__ = (

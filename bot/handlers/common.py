@@ -6,8 +6,9 @@ from sqlalchemy import text
 
 from bot.config import get_settings
 from bot.db import async_session
-from bot.keyboards import back_to_menu, main_menu, start_menu
+from bot.keyboards import back_to_menu, main_menu, share_preview, start_menu
 from bot.services.events import track
+from bot.services.shares import share_preview as get_share_preview
 from bot.services.users import get_or_create_user
 
 router = Router()
@@ -21,11 +22,32 @@ async def start(message: Message, state: FSMContext) -> None:
     async with async_session() as session:
         user = await get_or_create_user(session, message.from_user)
         await track(session, user.id, "bot_start", source="start")
+        token = _share_token(message.text)
+        preview = await get_share_preview(session, user, token) if token else None
+        if token and preview is not None:
+            await track(session, user.id, "share_opened", token=token, via="bot")
         await session.commit()
+    if token and preview is not None:
+        await message.answer(
+            f"{preview['title']} — {preview['cards_count']} карточек · от {preview['author']}",
+            reply_markup=share_preview(get_settings().web_app_url, token),
+        )
+        return
+    stale_link = "\n\nСсылка на колоду устарела." if token else ""
     await message.answer(
-        "Это бот для интервального повторения. Выберите действие в меню.",
+        "Это бот для интервального повторения. Выберите действие в меню." + stale_link,
         reply_markup=start_menu(get_settings().web_app_url),
     )
+
+
+def _share_token(text: str | None) -> str | None:
+    if not text:
+        return None
+    parts = text.split(maxsplit=1)
+    if len(parts) != 2 or not parts[1].startswith("deck_"):
+        return None
+    token = parts[1].removeprefix("deck_").strip()
+    return token or None
 
 
 @router.message(Command("menu"))

@@ -212,6 +212,35 @@ async def _get_deck_by_name(
     return result.scalar_one_or_none()
 
 
+async def available_root_deck_name(
+    session: AsyncSession,
+    user: User,
+    title: str,
+    source_label: str,
+) -> str:
+    existing_names = set(
+        (
+            await session.execute(
+                select(Deck.name).where(
+                    Deck.user_id == user.id,
+                    Deck.parent_id.is_(None),
+                )
+            )
+        ).scalars()
+    )
+    if title not in existing_names:
+        return title
+
+    base_name = f"{title} ({source_label})"
+    if base_name not in existing_names:
+        return base_name
+
+    suffix = 2
+    while f"{base_name} {suffix}" in existing_names:
+        suffix += 1
+    return f"{base_name} {suffix}"
+
+
 async def get_or_create_child_deck(
     session: AsyncSession,
     user: User,

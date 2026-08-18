@@ -29,6 +29,21 @@ def start_menu(web_app_url: str) -> InlineKeyboardMarkup:
     )
 
 
+def share_preview(web_app_url: str, token: str) -> InlineKeyboardMarkup:
+    if not web_app_url:
+        return main_menu()
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Открыть в приложении",
+                    web_app=WebAppInfo(url=f"{web_app_url}?share={token}"),
+                )
+            ]
+        ]
+    )
+
+
 def back_to_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[

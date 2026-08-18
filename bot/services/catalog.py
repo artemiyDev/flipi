@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.models import Deck, SharedDeck, User
 from bot.services.cards import create_basic_note
+from bot.services.decks import available_root_deck_name
 from bot.services.events import track
 
 
@@ -61,7 +62,7 @@ async def install_catalog_deck(
     if active_install is not None:
         raise CatalogDeckAlreadyInstalledError("Catalog deck is already installed")
 
-    deck_name = await _available_catalog_deck_name(session, user, shared_deck.title)
+    deck_name = await available_root_deck_name(session, user, shared_deck.title, "catalog")
     deck = Deck(
         user_id=user.id,
         name=deck_name,
@@ -88,34 +89,6 @@ async def install_catalog_deck(
     await session.commit()
     await session.refresh(deck)
     return CatalogInstallResult(deck_id=deck.id, added=len(shared_deck.notes))
-
-
-async def _available_catalog_deck_name(
-    session: AsyncSession,
-    user: User,
-    title: str,
-) -> str:
-    existing_names = set(
-        (
-            await session.execute(
-                select(Deck.name).where(
-                    Deck.user_id == user.id,
-                    Deck.parent_id.is_(None),
-                )
-            )
-        ).scalars()
-    )
-    if title not in existing_names:
-        return title
-
-    base_name = f"{title} (catalog)"
-    if base_name not in existing_names:
-        return base_name
-
-    suffix = 2
-    while f"{base_name} {suffix}" in existing_names:
-        suffix += 1
-    return f"{base_name} {suffix}"
 
 
 def _merge_tags(deck_tags: list[str], note_tags: list[str]) -> list[str]:

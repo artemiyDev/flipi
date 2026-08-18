@@ -104,6 +104,8 @@ For local Mini App development, run `npm run dev` in `frontend/`; Vite proxies
 | `WEB_APP_URL` | — | public HTTPS URL of the Telegram Mini App |
 | `AUTO_CREATE_TABLES` | `false` | build tables from models instead of migrations — local experiments only, never in production |
 
+`BOT_USERNAME` is the Telegram bot username used to build deck-share links.
+
 ### Commands
 
 `/menu` `/cancel` `/status` `/backup` `/restore` `/help`

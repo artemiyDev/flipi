@@ -10,6 +10,7 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from bot.config import get_settings
 from app.deps import get_current_user, get_db_session
 from bot.models import NoteStyle, User
 from bot.services.apkg_importer import ImportedCard, parse_apkg_media, parse_apkg_notes
@@ -34,6 +35,13 @@ from bot.services.catalog import (
     CatalogDeckAlreadyInstalledError,
     install_catalog_deck,
     list_catalog_decks,
+)
+from bot.services.shares import (
+    ShareAlreadyInstalledError,
+    ShareOwnDeckError,
+    create_or_get_share,
+    install_shared_deck,
+    share_preview,
 )
 from bot.services.decks import (
     DECK_OPTION_PRESETS,
@@ -605,6 +613,62 @@ async def create_deck_endpoint(
     await track(session, user.id, "deck_created")
     await session.commit()
     return await deck_detail(session, user, deck)
+
+
+@router.post("/decks/{deck_id}/share")
+async def share_deck_endpoint(
+    deck_id: int,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> dict:
+    deck = await api_deck_or_404(session, user, deck_id)
+    if deck.is_archived:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Deck is archived")
+    share, created = await create_or_get_share(session, deck, user)
+    if created:
+        await track(session, user.id, "share_created", deck_id=deck.id)
+    await session.commit()
+    bot_username = getattr(get_settings(), "bot_username", "")
+    link = f"https://t.me/{bot_username}?start=deck_{share.token}" if bot_username else None
+    return {"token": share.token, "link": link}
+
+
+@router.get("/share/{token}")
+async def get_share_endpoint(
+    token: str,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> dict:
+    preview = await share_preview(session, user, token)
+    if preview is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Share not found")
+    await track(session, user.id, "share_opened", token=token)
+    await session.commit()
+    return preview
+
+
+@router.post("/share/{token}/install")
+async def install_share_endpoint(
+    token: str,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> dict:
+    try:
+        result = await install_shared_deck(session, user, token)
+    except (ShareAlreadyInstalledError, ShareOwnDeckError) as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Share not found")
+    await track(
+        session,
+        user.id,
+        "share_installed",
+        token=token,
+        owner_user_id=result.owner_user_id,
+        added=result.added,
+    )
+    await session.commit()
+    return {"deck_id": result.deck_id, "added": result.added}
 
 
 @router.get("/decks/archived")
