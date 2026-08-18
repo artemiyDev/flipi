@@ -53,6 +53,7 @@ from bot.services.decks import (
     restore_deck,
     update_deck_settings,
 )
+from bot.services.events import track
 from bot.services.media import (
     extract_media_references,
     get_media_file,
@@ -300,6 +301,16 @@ async def import_file_endpoint(
             detail=f"Не удалось прочитать файл: {exc}",
         ) from exc
 
+    await track(
+        session,
+        user.id,
+        "import_done",
+        format=suffix.removeprefix("."),
+        added=result.added,
+        updated=result.updated,
+        unchanged=result.unchanged,
+    )
+    await session.commit()
     return {
         "added": result.added,
         "updated": result.updated,
@@ -326,7 +337,10 @@ async def create_card_endpoint(
         payload.back,
         tags=payload.tags,
         create_reverse=payload.reverse,
+        commit=False,
     )
+    await track(session, user.id, "card_created", reverse=payload.reverse)
+    await session.commit()
     return {"note_id": note.id}
 
 
@@ -552,6 +566,8 @@ async def create_deck_endpoint(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    await track(session, user.id, "deck_created")
+    await session.commit()
     return await deck_detail(session, user, deck)
 
 

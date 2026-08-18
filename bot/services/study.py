@@ -12,6 +12,7 @@ from bot.services.cards import (
     increment_daily_counter,
 )
 from bot.services.decks import list_user_decks
+from bot.services.events import track
 from bot.services.scheduler import review_with_fsrs
 from bot.services.timezones import user_day_start_utc, user_local_date
 
@@ -80,6 +81,7 @@ async def answer_card(
     if card.deck.bury_siblings:
         await bury_sibling_cards(session, card, user.timezone)
     await increment_daily_counter(session, card, previous_state, user.timezone)
+    await track(session, user.id, "review_answer", rating=rating, state_after=card.state)
     await session.commit()
     return card
 

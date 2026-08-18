@@ -7,6 +7,7 @@ from sqlalchemy import text
 from bot.config import get_settings
 from bot.db import async_session
 from bot.keyboards import back_to_menu, main_menu, start_menu
+from bot.services.events import track
 from bot.services.users import get_or_create_user
 
 router = Router()
@@ -18,7 +19,9 @@ async def start(message: Message, state: FSMContext) -> None:
     if message.from_user is None:
         return
     async with async_session() as session:
-        await get_or_create_user(session, message.from_user)
+        user = await get_or_create_user(session, message.from_user)
+        await track(session, user.id, "bot_start", source="start")
+        await session.commit()
     await message.answer(
         "Это бот для интервального повторения. Выберите действие в меню.",
         reply_markup=start_menu(get_settings().web_app_url),

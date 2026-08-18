@@ -18,6 +18,7 @@ from bot.services.decks import (
     restore_deck,
 )
 from bot.services.exporters import export_deck_csv
+from bot.services.events import track
 from bot.services.stats import deck_review_stats
 from bot.services.users import get_or_create_user
 from bot.states import AddDeck, EditDeck
@@ -101,6 +102,8 @@ async def add_deck_description(message: Message, state: FSMContext) -> None:
             await session.rollback()
             await message.answer("Колода с таким названием уже есть.")
             return
+        await track(session, user.id, "deck_created")
+        await session.commit()
 
     await state.clear()
     await message.answer(

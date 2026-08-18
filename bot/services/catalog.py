@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.models import Deck, SharedDeck, User
 from bot.services.cards import create_basic_note
+from bot.services.events import track
 
 
 class CatalogDeckAlreadyInstalledError(ValueError):
@@ -83,6 +84,7 @@ async def install_catalog_deck(
             commit=False,
         )
 
+    await track(session, user.id, "catalog_install", slug=slug, added=len(shared_deck.notes))
     await session.commit()
     await session.refresh(deck)
     return CatalogInstallResult(deck_id=deck.id, added=len(shared_deck.notes))

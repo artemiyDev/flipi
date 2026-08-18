@@ -29,6 +29,7 @@ from bot.services.cards import (
     update_note_field,
 )
 from bot.services.decks import get_deck, list_user_deck_display_choices
+from bot.services.events import track
 from bot.services.users import get_or_create_user
 from bot.states import AddCard, EditNote, SetDueDate
 
@@ -125,7 +126,10 @@ async def add_card_finish(callback: CallbackQuery, state: FSMContext) -> None:
             tags=data.get("tags") or [],
             create_reverse=create_reverse,
             source="manual",
+            commit=False,
         )
+        await track(session, user.id, "card_created", reverse=create_reverse)
+        await session.commit()
 
     await state.clear()
     await callback.message.answer("Карточка добавлена.")

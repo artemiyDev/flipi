@@ -4,6 +4,7 @@ from aiogram import F, Router
 from aiogram.types import CallbackQuery
 
 from bot.db import async_session
+from bot.services.events import track
 from bot.services.timezones import user_local_date
 from bot.services.users import get_or_create_user, skip_reminder_today, snooze_reminder
 
@@ -18,6 +19,8 @@ async def snooze(callback: CallbackQuery) -> None:
     async with async_session() as session:
         user = await get_or_create_user(session, callback.from_user)
         await snooze_reminder(session, user, now_utc)
+        await track(session, user.id, "reminder_clicked", action="snooze")
+        await session.commit()
     await callback.answer("Напомню через 2 часа")
 
 
@@ -29,4 +32,6 @@ async def skip_today(callback: CallbackQuery) -> None:
     async with async_session() as session:
         user = await get_or_create_user(session, callback.from_user)
         await skip_reminder_today(session, user, user_local_date(now_utc, user.timezone))
+        await track(session, user.id, "reminder_clicked", action="skip")
+        await session.commit()
     await callback.answer("Хорошо, до завтра")

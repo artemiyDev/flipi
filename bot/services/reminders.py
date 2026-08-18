@@ -10,6 +10,7 @@ from bot.keyboards import reminder_actions
 from bot.models import Card, Deck, User
 from bot.services.stats import streak_days
 from bot.services.study import count_done_today
+from bot.services.events import track
 from bot.services.timezones import user_local_datetime
 
 logger = logging.getLogger(__name__)
@@ -92,6 +93,7 @@ async def send_due_reminders(
                     reminder_text(due_count, await streak_days(session, user, local_today)),
                     reply_markup=reminder_actions(web_app_url),
                 )
+                await track(session, user.id, "reminder_sent", due=due_count)
             except Exception:
                 logger.exception("Unable to send reminder to user %s", user.id)
             user.reminder_last_sent_date = local_today

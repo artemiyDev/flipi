@@ -10,6 +10,7 @@ from bot.services.apkg_importer import ImportedCard, ImportedNote, parse_apkg_me
 from bot.services.decks import list_user_deck_display_choices, resolve_apkg_deck
 from bot.services.importers import decode_text_payload, parse_text_cards
 from bot.services.import_flow import ImportFlowError, import_apkg_notes, import_text_cards
+from bot.services.events import track
 from bot.services.users import get_or_create_user
 from bot.states import ImportCards
 
@@ -96,13 +97,13 @@ async def import_document(message: Message, state: FSMContext, bot: Bot) -> None
     except UnicodeDecodeError:
         await message.answer("Не удалось прочитать кодировку файла. Поддерживаются UTF-8 и Windows-1251.")
         return
-    await _import_text_payload(message, state, payload, source="import")
+    await _import_text_payload(message, state, payload, source="import", format=suffix)
 
 
 @router.message(ImportCards.payload)
 async def import_text(message: Message, state: FSMContext) -> None:
     payload = message.text or ""
-    await _import_text_payload(message, state, payload, source="import")
+    await _import_text_payload(message, state, payload, source="import", format="text")
 
 
 async def _import_text_payload(
@@ -110,12 +111,13 @@ async def _import_text_payload(
     state: FSMContext,
     payload: str,
     source: str,
+    format: str,
 ) -> None:
     rows = [
         ImportedCard(front=front, back=back, tags=tags, create_reverse=create_reverse)
         for front, back, tags, create_reverse in parse_text_cards(payload)
     ]
-    await _import_rows(message, state, rows, source=source, media_files=[])
+    await _import_rows(message, state, rows, source=source, format=format, media_files=[])
 
 
 async def _import_rows(
@@ -123,6 +125,7 @@ async def _import_rows(
     state: FSMContext,
     rows: list[ImportedCard],
     source: str,
+    format: str,
     media_files,
 ) -> None:
     if message.from_user is None:
@@ -136,6 +139,16 @@ async def _import_rows(
         except (ImportFlowError, LookupError) as exc:
             await message.answer(str(exc))
             return
+        await track(
+            session,
+            user.id,
+            "import_done",
+            format=format,
+            added=result.added,
+            updated=result.updated,
+            unchanged=result.unchanged,
+        )
+        await session.commit()
 
     await state.clear()
     await message.answer(
@@ -169,6 +182,16 @@ async def _import_notes(
         except (ImportFlowError, LookupError) as exc:
             await message.answer(str(exc))
             return
+        await track(
+            session,
+            user.id,
+            "import_done",
+            format="apkg",
+            added=result.added,
+            updated=result.updated,
+            unchanged=result.unchanged,
+        )
+        await session.commit()
 
     await state.clear()
     await message.answer(
