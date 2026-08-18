@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useState} from "react";
+import {useCallback, useEffect, useRef, useState} from "react";
 
 import {
   ApiError,
@@ -22,6 +22,7 @@ import {CardBody} from "./CardBody";
 
 const PAGE_SIZE = 25;
 const FLAGS: CardFlag[] = ["red", "orange", "green", "blue", "purple"];
+const CLOZE_RE = /{{c([1-9]\d*)::(.+?)(?:::(.*?))?}}/gs;
 
 function isUnauthorized(error: unknown): boolean {
   return error instanceof ApiError && error.status === 401;
@@ -39,6 +40,19 @@ function tagsFromInput(value: string): string[] {
   return value.split(/\s+/).filter(Boolean);
 }
 
+function clozeNumbers(text: string): number[] {
+  return [...new Set([...text.matchAll(CLOZE_RE)].filter((match) => match[2].trim()).map((match) => Number(match[1])))].sort((left, right) => left - right);
+}
+
+function nextClozeNumber(text: string): number {
+  const used = new Set(clozeNumbers(text));
+  let number = 1;
+  while (used.has(number)) {
+    number += 1;
+  }
+  return number;
+}
+
 export function CardCreateScreen({deckId, onClose, onUnauthorized}: {
   deckId: number;
   onClose: () => void;
@@ -49,10 +63,13 @@ export function CardCreateScreen({deckId, onClose, onUnauthorized}: {
   const [front, setFront] = useState("");
   const [back, setBack] = useState("");
   const [tags, setTags] = useState("");
+  const [type, setType] = useState<"basic" | "cloze">("basic");
   const [reverse, setReverse] = useState(false);
+  const [lastClozeNumber, setLastClozeNumber] = useState<number | null>(null);
   const [errors, setErrors] = useState<{front?: string; back?: string}>({});
   const [error, setError] = useState<Error | null>(null);
   const [saving, setSaving] = useState(false);
+  const frontRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     fetchDecks().then(setDecks).catch((requestErrorValue: unknown) => {
@@ -61,30 +78,51 @@ export function CardCreateScreen({deckId, onClose, onUnauthorized}: {
   }, [onUnauthorized]);
 
   const submit = (again: boolean) => {
-    const nextErrors = {
-      ...(front.trim() ? {} : {front: "Введите лицевую сторону"}),
-      ...(back.trim() ? {} : {back: "Введите обратную сторону"}),
-    };
+    const nextErrors = type === "cloze"
+      ? (clozeNumbers(front).length ? {} : {front: "Добавьте хотя бы один пропуск"})
+      : {
+        ...(front.trim() ? {} : {front: "Введите лицевую сторону"}),
+        ...(back.trim() ? {} : {back: "Введите обратную сторону"}),
+      };
     setErrors(nextErrors);
     setError(null);
     if (Object.keys(nextErrors).length > 0) {
       return;
     }
     setSaving(true);
-    createCard({deck_id: Number(selectedDeckId), front, back, tags: tagsFromInput(tags), reverse}).then(() => {
+    createCard({deck_id: Number(selectedDeckId), ...(type === "cloze" ? {type} : {}), front, back, tags: tagsFromInput(tags), reverse: type === "basic" && reverse}).then(() => {
       if (again) {
         setFront("");
         setBack("");
+        setLastClozeNumber(null);
       } else {
         onClose();
       }
     }).catch((requestErrorValue: unknown) => {
       if (requestErrorValue instanceof ApiError && requestErrorValue.status === 422) {
-        setErrors({front: "Проверьте содержимое карточки", back: "Проверьте содержимое карточки"});
+        setErrors(type === "cloze" ? {front: "Добавьте хотя бы один пропуск"} : {front: "Проверьте содержимое карточки", back: "Проверьте содержимое карточки"});
       } else {
         requestError(setError, onUnauthorized, "Не удалось добавить карточку.", requestErrorValue);
       }
     }).finally(() => setSaving(false));
+  };
+
+  const wrapSelection = (sameCloze: boolean) => {
+    const input = frontRef.current;
+    if (!input || input.selectionStart === input.selectionEnd) {
+      return;
+    }
+    const clozeNumber = sameCloze && lastClozeNumber !== null ? lastClozeNumber : nextClozeNumber(front);
+    const selected = front.slice(input.selectionStart, input.selectionEnd);
+    const nextFront = `${front.slice(0, input.selectionStart)}{{c${clozeNumber}::${selected}}}${front.slice(input.selectionEnd)}`;
+    const selectionEnd = input.selectionStart + `{{c${clozeNumber}::${selected}}}`.length;
+    setFront(nextFront);
+    setLastClozeNumber(clozeNumber);
+    setErrors((current) => ({...current, front: undefined}));
+    window.requestAnimationFrame(() => {
+      input.focus();
+      input.setSelectionRange(selectionEnd, selectionEnd);
+    });
   };
 
   if (error) {
@@ -97,12 +135,14 @@ export function CardCreateScreen({deckId, onClose, onUnauthorized}: {
   return <section className="cards-screen"><header className="cards-header"><button className="close" aria-label="К колоде" onClick={onClose}>×</button><h1>Добавить карточку</h1></header>
     <form className="card-form" onSubmit={(event) => { event.preventDefault(); submit(false); }}>
       <label>Колода<select aria-label="Колода" value={selectedDeckId} onChange={(event) => setSelectedDeckId(event.target.value)}>{decks.map((deck) => <option key={deck.id} value={deck.id}>{deck.name}</option>)}</select></label>
-      <label>Лицевая сторона<textarea value={front} onChange={(event) => setFront(event.target.value)} /></label>
+      <div className="toggle" role="group" aria-label="Тип карточки"><button type="button" className={type === "basic" ? "primary" : ""} onClick={() => setType("basic")}>Обычная</button><button type="button" className={type === "cloze" ? "primary" : ""} onClick={() => setType("cloze")}>Пропуски (cloze)</button></div>
+      <label>{type === "cloze" ? "Текст" : "Лицевая сторона"}<textarea ref={frontRef} value={front} onChange={(event) => setFront(event.target.value)} /></label>
       {errors.front && <p className="field-error" role="alert">{errors.front}</p>}
-      <label>Обратная сторона<textarea value={back} onChange={(event) => setBack(event.target.value)} /></label>
+      {type === "cloze" && <div className="form-actions"><button type="button" onClick={() => wrapSelection(false)}>Скрыть выделенное</button><button type="button" disabled={lastClozeNumber === null} onClick={() => wrapSelection(true)}>Тот же пропуск</button><span className="hint">Карточек будет: {clozeNumbers(front).length}</span></div>}
+      <label>{type === "cloze" ? "Дополнение" : "Обратная сторона"}<textarea value={back} onChange={(event) => setBack(event.target.value)} /></label>
       {errors.back && <p className="field-error" role="alert">{errors.back}</p>}
       <label>Теги <span className="hint">(через пробел)</span><input value={tags} onChange={(event) => setTags(event.target.value)} /></label>
-      <label className="toggle"><input checked={reverse} type="checkbox" onChange={(event) => setReverse(event.target.checked)} />Обратная карточка</label>
+      {type === "basic" && <label className="toggle"><input checked={reverse} type="checkbox" onChange={(event) => setReverse(event.target.checked)} />Обратная карточка</label>}
       <div className="form-actions"><button className="primary" disabled={saving} type="submit">Сохранить</button><button disabled={saving} type="button" onClick={() => submit(true)}>Сохранить и добавить ещё</button></div>
     </form>
   </section>;

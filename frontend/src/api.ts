@@ -209,7 +209,7 @@ export function importFile(file: File, deckId: number | "auto"): Promise<ImportR
   return request<ImportResult>("/import", {method: "POST", body: formData});
 }
 
-export function createCard(payload: {deck_id: number; front: string; back: string; tags?: string[]; reverse: boolean}): Promise<{note_id: number}> {
+export function createCard(payload: {deck_id: number; type?: "basic" | "cloze"; front: string; back: string; tags?: string[]; reverse: boolean}): Promise<{note_id: number; cards_created: number}> {
   return request("/cards", {method: "POST", body: JSON.stringify(payload)});
 }
 

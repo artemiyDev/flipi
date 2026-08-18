@@ -12,6 +12,7 @@ from bot.services.scheduler import new_fsrs_card_json
 from bot.services.timezones import user_today
 
 CLOZE_RE = re.compile(r"{{c(\d+)::(.*?)(?:::(.*?))?}}", flags=re.DOTALL)
+CLOZE_CREATE_RE = re.compile(r"{{c([1-9]\d*)::(.+?)(?:::(.*?))?}}", flags=re.DOTALL)
 TAG_RE = re.compile(r"<[^>]+>")
 IMG_RE = re.compile(r"""(?is)<img\b[^>]*\bsrc=["']?([^"'\s>]+)["']?[^>]*>""")
 
@@ -241,6 +242,63 @@ async def create_basic_note(
     return note
 
 
+def cloze_card_count(text: str) -> int:
+    return len(
+        {
+            int(match.group(1))
+            for match in CLOZE_CREATE_RE.finditer(text)
+            if match.group(2).strip()
+        }
+    )
+
+
+async def create_cloze_note(
+    session: AsyncSession,
+    user: User,
+    deck: Deck,
+    text: str,
+    extra: str = "",
+    tags: list[str] | None = None,
+    commit: bool = True,
+) -> Note:
+    cloze_numbers = sorted(
+        {
+            int(match.group(1))
+            for match in CLOZE_CREATE_RE.finditer(text)
+            if match.group(2).strip()
+        }
+    )
+    if not cloze_numbers:
+        raise ValueError("Добавьте хотя бы один пропуск")
+
+    cleaned_text = text.strip()
+    cleaned_extra = extra.strip()
+    return await create_note_with_cards(
+        session=session,
+        user=user,
+        deck=deck,
+        front=cleaned_text,
+        back=cleaned_extra,
+        extra=cleaned_extra or None,
+        tags=tags,
+        note_type="Cloze",
+        anki_model_id=None,
+        fields={"Text": cleaned_text, "Extra": cleaned_extra},
+        source=None,
+        card_specs=[
+            {
+                "direction": "front_back",
+                "template_name": "Cloze",
+                "template_ord": cloze_number - 1,
+                "question_template": "{{cloze:Text}}",
+                "answer_template": "{{cloze:Text}}<br>{{Extra}}",
+            }
+            for cloze_number in cloze_numbers
+        ],
+        commit=commit,
+    )
+
+
 async def create_note_with_cards(
     session: AsyncSession,
     user: User,
@@ -255,6 +313,7 @@ async def create_note_with_cards(
     card_specs: list[dict],
     anki_guid: str | None = None,
     extra: str | None = None,
+    commit: bool = True,
 ) -> Note:
     now = datetime.now(UTC)
     note = Note(
@@ -291,7 +350,10 @@ async def create_note_with_cards(
             )
         )
 
-    await session.commit()
+    if commit:
+        await session.commit()
+    else:
+        await session.flush()
     await session.refresh(note)
     return note
 

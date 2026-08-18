@@ -5,7 +5,7 @@ from typing import Annotated, Literal
 import zipfile
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile, status
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,6 +20,8 @@ from bot.services.cards import (
     card_question,
     card_question_html,
     create_basic_note,
+    create_cloze_note,
+    cloze_card_count,
     delete_note,
     get_card,
     get_next_due_card,
@@ -133,17 +135,17 @@ class CardCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     deck_id: int
+    type: Literal["basic", "cloze"] = "basic"
     front: str
-    back: str
+    back: str = ""
     tags: list[str] | None = None
     reverse: bool = False
 
-    @field_validator("front", "back")
-    @classmethod
-    def validate_content(cls, value: str) -> str:
-        if not value.strip():
+    @model_validator(mode="after")
+    def validate_content(self):
+        if self.type == "basic" and (not self.front.strip() or not self.back.strip()):
             raise ValueError("Card content must not be empty")
-        return value
+        return self
 
 
 class NotePatchRequest(BaseModel):
@@ -383,19 +385,38 @@ async def create_card_endpoint(
     deck = await get_deck(session, user, payload.deck_id)
     if deck is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deck not found")
-    note = await create_basic_note(
-        session,
-        user,
-        deck,
-        payload.front,
-        payload.back,
-        tags=payload.tags,
-        create_reverse=payload.reverse,
-        commit=False,
-    )
-    await track(session, user.id, "card_created", reverse=payload.reverse)
+    if payload.type == "cloze":
+        try:
+            note = await create_cloze_note(
+                session,
+                user,
+                deck,
+                payload.front,
+                extra=payload.back,
+                tags=payload.tags,
+                commit=False,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=str(exc),
+            ) from exc
+        cards_created = cloze_card_count(payload.front)
+    else:
+        note = await create_basic_note(
+            session,
+            user,
+            deck,
+            payload.front,
+            payload.back,
+            tags=payload.tags,
+            create_reverse=payload.reverse,
+            commit=False,
+        )
+        cards_created = 2 if payload.reverse else 1
+    await track(session, user.id, "card_created", reverse=payload.reverse and payload.type == "basic")
     await session.commit()
-    return {"note_id": note.id}
+    return {"note_id": note.id, "cards_created": cards_created}
 
 
 @router.get("/cards/search")
