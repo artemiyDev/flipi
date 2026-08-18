@@ -42,6 +42,9 @@ HTML_TAGS = {
     "td",
     "img",
 }
+MAX_CARD_CSS_BYTES = 64 * 1024
+IMPORT_CSS_RE = re.compile(r"@import\s+[^;]+;", flags=re.IGNORECASE)
+CSS_URL_RE = re.compile(r"url\(\s*(.*?)\s*\)", flags=re.IGNORECASE | re.DOTALL)
 
 
 def sanitize_card_html(value: str) -> str:
@@ -58,6 +61,23 @@ def sanitize_card_html(value: str) -> str:
         attribute_filter=allow_attribute,
     )
     return re.sub(r"<img>", "", sanitized)
+
+
+def sanitize_card_css(value: str) -> str:
+    clipped = value.encode("utf-8")[:MAX_CARD_CSS_BYTES].decode("utf-8", "ignore")
+    without_imports = IMPORT_CSS_RE.sub("", clipped)
+
+    def replace_url(match: re.Match[str]) -> str:
+        target = match.group(1).strip()
+        if len(target) >= 2 and target[0] in "\"'" and target[-1] == target[0]:
+            target = target[1:-1].strip()
+        if target.lower().startswith("data:") or target.startswith("/api/media/"):
+            return match.group(0)
+        return ""
+
+    sanitized = CSS_URL_RE.sub(replace_url, without_imports)
+    sanitized = re.sub(r"expression\s*\(", "", sanitized, flags=re.IGNORECASE)
+    return re.sub(r"behavior\s*:", "", sanitized, flags=re.IGNORECASE)
 
 
 async def get_next_card_for_user(session: AsyncSession, user: User) -> Card | None:

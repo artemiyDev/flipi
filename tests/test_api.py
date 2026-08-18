@@ -13,7 +13,7 @@ from sqlalchemy import select
 
 from app.deps import get_db_session
 from app.main import create_app
-from bot.models import Card, MediaFile, ReviewLog, User
+from bot.models import Card, MediaFile, NoteStyle, ReviewLog, User
 from bot.services.decks import archive_deck, create_deck
 from bot.services.users import get_or_create_user
 
@@ -380,6 +380,7 @@ def test_study_next_renders_html_media_and_has_no_side_effects(session_factory, 
     assert "evil.example" not in payload["question_html"]
     assert f'<img src="/api/media/{media_id}">' in payload["question_html"]
     assert {item["name"] for item in payload["media"]} == {"word.png", "word.mp3"}
+    assert payload["card_css"] is None
 
     async def card_state() -> tuple[str, int]:
         async with session_factory() as session:
@@ -387,6 +388,44 @@ def test_study_next_renders_html_media_and_has_no_side_effects(session_factory, 
             return card.state, card.reps
 
     assert asyncio.run(card_state()) == ("new", 0)
+
+
+def test_study_and_card_details_return_model_css(session_factory, monkeypatch) -> None:
+    from bot.services.cards import create_basic_note
+
+    async def create_data() -> int:
+        async with session_factory() as session:
+            user = await get_or_create_user(session, TelegramUser())
+            deck = await create_deck(session, user, "Styled")
+            note = await create_basic_note(
+                session,
+                user,
+                deck,
+                "question",
+                "answer",
+                anki_model_id="42",
+            )
+            session.add(
+                NoteStyle(
+                    user_id=user.id,
+                    anki_model_id="42",
+                    css='.card { background: url("https://evil.example/card.png"); color: red; }',
+                )
+            )
+            await session.commit()
+            return (await session.execute(select(Card.id).where(Card.note_id == note.id))).scalar_one()
+
+    card_id = asyncio.run(create_data())
+    app = build_app(session_factory, monkeypatch)
+    headers = {"X-Telegram-Init-Data": signed_init_data()}
+
+    next_card = request(app, "/api/study/next?deck_id=all", headers)
+    details = request(app, f"/api/cards/{card_id}", headers)
+
+    assert next_card.status_code == 200
+    assert details.status_code == 200
+    assert next_card.json()["card_css"] == ".card { background: ; color: red; }"
+    assert details.json()["card_css"] == ".card { background: ; color: red; }"
 
 
 def test_study_answer_records_review_buries_siblings_and_returns_media(session_factory, monkeypatch) -> None:
@@ -559,6 +598,7 @@ def test_cards_api_creates_reverse_cards_and_renders_sanitized_details(
     assert details.status_code == 200
     assert "<b>слово</b>" in details.json()["question_html"]
     assert "script" not in details.json()["question_html"]
+    assert details.json()["card_css"] is None
 
 
 def test_cards_api_search_actions_and_note_editing(session_factory, monkeypatch) -> None:

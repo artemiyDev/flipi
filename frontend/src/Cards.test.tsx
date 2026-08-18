@@ -30,6 +30,8 @@ const card = {
   deck_name: "Spanish",
   question_html: "<b>Hola</b>",
   answer_html: "<i>Привет</i>",
+  card_css: null,
+  media: [],
   fields: {}, front: "Hola", back: "Привет", tags: ["basic"], state: "new", due: "2026-08-15T00:00:00Z", lapses: 0,
   suspended: false, buried_until: null, flag: null,
 };
@@ -89,8 +91,8 @@ describe("card screens", () => {
   it("updates notes, toggles suspension, sets and clears flags, and returns after confirmed deletion", async () => {
     const onDeleted = vi.fn();
     vi.stubGlobal("confirm", vi.fn(() => true));
-    render(<CardScreen cardId={11} onBack={vi.fn()} onDeleted={onDeleted} onUnauthorized={vi.fn()} />);
-    await screen.findByText("Hola", {selector: "b"});
+    const {container} = render(<CardScreen cardId={11} onBack={vi.fn()} onDeleted={onDeleted} onUnauthorized={vi.fn()} />);
+    await waitFor(() => expect(container.querySelector(".card-content")?.shadowRoot?.querySelector("b")?.textContent).toBe("Hola"));
     fireEvent.change(screen.getByLabelText("Лицевая сторона"), {target: {value: "Buenos días"}});
     fireEvent.click(screen.getByText("Сохранить"));
     await waitFor(() => expect(apiMocks.updateNote).toHaveBeenCalledWith(8, {front: "Buenos días", back: "Привет", tags: ["basic"]}));

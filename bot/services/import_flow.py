@@ -1,12 +1,14 @@
 from dataclasses import dataclass
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from bot.models import Deck, User
+from bot.models import Deck, NoteStyle, User
 from bot.services.apkg_importer import ImportedCard, ImportedMedia, ImportedNote
 from bot.services.cards import create_basic_note, import_anki_note, note_exists
 from bot.services.decks import deck_full_path, get_deck, list_all_user_decks, resolve_apkg_deck
 from bot.services.media import save_imported_media_files
+from bot.services.study import sanitize_card_css
 
 
 class ImportFlowError(ValueError):
@@ -92,6 +94,13 @@ async def import_apkg_notes(
     media_saved_once = False
 
     for note in notes:
+        if note.anki_model_id is not None and note.css is not None:
+            await _upsert_note_style(
+                session,
+                user,
+                note.anki_model_id,
+                sanitize_card_css(note.css),
+            )
         note_deck = selected_deck
         if auto_decks:
             note_deck = await _get_cached_deck(
@@ -164,6 +173,25 @@ async def import_apkg_notes(
         media_skipped,
         added_cards,
     )
+
+
+async def _upsert_note_style(
+    session: AsyncSession,
+    user: User,
+    anki_model_id: str,
+    css: str,
+) -> None:
+    result = await session.execute(
+        select(NoteStyle).where(
+            NoteStyle.user_id == user.id,
+            NoteStyle.anki_model_id == anki_model_id,
+        )
+    )
+    style = result.scalar_one_or_none()
+    if style is None:
+        session.add(NoteStyle(user_id=user.id, anki_model_id=anki_model_id, css=css))
+    elif style.css != css:
+        style.css = css
 
 
 async def _get_cached_deck(

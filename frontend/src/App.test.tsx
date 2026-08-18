@@ -48,15 +48,15 @@ describe("Mini App", () => {
   it("answers a card and loads the next one", async () => {
     apiMocks.fetchDecks.mockResolvedValue([{id: 1, name: "Spanish", new_count: 1, learning_count: 0, review_count: 0}]);
     apiMocks.fetchNextCard
-      .mockResolvedValueOnce({card_id: 7, deck_id: 1, deck_name: "Spanish", progress: {new: 1, learning: 0, review: 0}, question_html: "<b>Question</b>", answer_html: "<i>Answer</i>", media: [], intervals: {again: "1м", hard: "5м", good: "1д", easy: "4д"}})
+      .mockResolvedValueOnce({card_id: 7, deck_id: 1, deck_name: "Spanish", progress: {new: 1, learning: 0, review: 0}, question_html: "<b>Question</b>", answer_html: "<i>Answer</i>", card_css: null, media: [], intervals: {again: "1м", hard: "5м", good: "1д", easy: "4д"}})
       .mockResolvedValueOnce({card_id: null, done_today: 9});
     apiMocks.submitAnswer.mockResolvedValue({ok: true, state: "review", due: "2026-01-01T00:00:00Z"});
-    render(<App />);
+    const {container} = render(<App />);
 
     fireEvent.click(await screen.findByText("Spanish"));
-    expect(await screen.findByText("Question")).toBeInTheDocument();
+    await waitFor(() => expect(container.querySelector(".card-content")?.shadowRoot?.textContent).toContain("Question"));
     fireEvent.click(screen.getByText("Показать ответ"));
-    expect(await screen.findByText("Answer")).toBeInTheDocument();
+    await waitFor(() => expect(container.querySelector(".card-content")?.shadowRoot?.textContent).toContain("Answer"));
     fireEvent.click(screen.getByText("Хорошо"));
     await waitFor(() => expect(apiMocks.submitAnswer).toHaveBeenCalledWith(7, 3, expect.any(Number)));
     expect(await screen.findByText("Готово. Сегодня: 9")).toBeInTheDocument();

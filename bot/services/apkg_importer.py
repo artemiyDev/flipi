@@ -41,6 +41,7 @@ class ImportedNote:
     note_type: str
     guid: str | None
     anki_model_id: str | None
+    css: str | None
     fields: dict[str, str]
     deck_name: str | None
     cards: list[ImportedCard]
@@ -131,6 +132,7 @@ def _read_collection_notes(db_path: Path) -> list[ImportedNote]:
         if not raw_fields:
             continue
         model = models.get(str(row["mid"]), {})
+        model_css = model.get("css")
         fields = _field_dict(model, raw_fields)
         deck_name = decks.get(str(row["did"]))
         tags = [tag for tag in row["tags"].split() if tag]
@@ -153,6 +155,7 @@ def _read_collection_notes(db_path: Path) -> list[ImportedNote]:
                     note_type=imported.note_type,
                     guid=str(row["guid"]) if row["guid"] is not None else None,
                     anki_model_id=imported.anki_model_id,
+                    css=str(model_css) if isinstance(model_css, str) else None,
                     fields=imported.fields or {},
                     deck_name=deck_name,
                     cards=[imported],
@@ -166,6 +169,7 @@ def _read_collection_notes(db_path: Path) -> list[ImportedNote]:
                     note_type=existing.note_type,
                     guid=existing.guid,
                     anki_model_id=existing.anki_model_id,
+                    css=existing.css,
                     fields=existing.fields,
                     deck_name=existing.deck_name,
                     cards=[*existing.cards, imported],

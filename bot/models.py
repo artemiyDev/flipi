@@ -152,6 +152,18 @@ class Note(Base):
     cards: Mapped[list["Card"]] = relationship(back_populates="note")
 
 
+class NoteStyle(Base):
+    __tablename__ = "note_styles"
+    __table_args__ = (
+        UniqueConstraint("user_id", "anki_model_id", name="uq_note_styles_user_model"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    anki_model_id: Mapped[str] = mapped_column(String(64))
+    css: Mapped[str] = mapped_column(Text)
+
+
 class Card(Base):
     __tablename__ = "cards"
 

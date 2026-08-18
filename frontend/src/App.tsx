@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useRef, useState} from "react";
+import {useCallback, useEffect, useState} from "react";
 
 import {
   ApiError,
@@ -10,7 +10,7 @@ import {
   type Progress,
   type StudyCard,
 } from "./api";
-import {hydrateCardMedia, releaseCardMedia} from "./media";
+import {CardBody} from "./CardBody";
 import {DeckScreen, Decks} from "./Decks";
 import {CardCreateScreen, CardScreen, CardsBrowser} from "./Cards";
 import {ImportScreen} from "./Import";
@@ -75,7 +75,6 @@ function Session({deckId, onClose, onUnauthorized}: {deckId: number | "all"; onC
   const [showAnswer, setShowAnswer] = useState(false);
   const [startedAt, setStartedAt] = useState(0);
   const [error, setError] = useState<Error | null>(null);
-  const contentRef = useRef<HTMLDivElement>(null);
 
   const loadNext = () => {
     setShowAnswer(false);
@@ -89,26 +88,6 @@ function Session({deckId, onClose, onUnauthorized}: {deckId: number | "all"; onC
   };
 
   useEffect(loadNext, [deckId]);
-
-  useEffect(() => {
-    const container = contentRef.current;
-    if (!container || !next || next.card_id === null) {
-      return;
-    }
-    let active = true;
-    let urls: string[] = [];
-    hydrateCardMedia(container, next.media).then((loadedUrls) => {
-      if (active) {
-        urls = loadedUrls;
-      } else {
-        releaseCardMedia(container, loadedUrls);
-      }
-    }).catch(setError);
-    return () => {
-      active = false;
-      releaseCardMedia(container, urls);
-    };
-  }, [next, showAnswer]);
 
   useEffect(() => {
     if (error instanceof ApiError && error.status === 401) {
@@ -141,11 +120,7 @@ function Session({deckId, onClose, onUnauthorized}: {deckId: number | "all"; onC
 
   return <section className="session">
     <header className="session-header"><button className="close" aria-label="К колодам" onClick={onClose}>×</button><span>{card.deck_name}</span><ProgressCounts progress={card.progress} /></header>
-    <div className="card-content" ref={contentRef}>
-      {/* HTML is sanitized by the server with nh3 before it reaches the Mini App. */}
-      <div dangerouslySetInnerHTML={{__html: card.question_html}} />
-      {showAnswer && <><hr /><div dangerouslySetInnerHTML={{__html: card.answer_html}} /></>}
-    </div>
+    <CardBody questionHtml={card.question_html} answerHtml={showAnswer ? card.answer_html : undefined} cardCss={card.card_css} media={card.media} />
     {!showAnswer ? <button className="primary wide" onClick={() => setShowAnswer(true)}>Показать ответ</button> :
       <div className="ratings">{ratings.map(([rating, interval, label]) => <button key={rating} onClick={() => answer(rating)}>{label}<small>{card.intervals[interval]}</small></button>)}</div>}
   </section>;

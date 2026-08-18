@@ -12,7 +12,7 @@ function mediaIdFromImage(image: HTMLImageElement): number | null {
 }
 
 export async function hydrateCardMedia(
-  container: HTMLElement,
+  container: HTMLElement | ShadowRoot,
   media: Media[],
   loadMedia: MediaLoader = fetchMedia,
 ): Promise<string[]> {
@@ -40,14 +40,15 @@ export async function hydrateCardMedia(
       audio.controls = true;
       audio.src = objectUrl;
       audio.dataset.mediaAudio = String(item.id);
-      container.append(audio);
+      const card = container.querySelector<HTMLElement>(".card");
+      (card ?? container).append(audio);
       objectUrls.push(objectUrl);
     }));
 
   return objectUrls;
 }
 
-export function releaseCardMedia(container: HTMLElement, objectUrls: string[]): void {
+export function releaseCardMedia(container: HTMLElement | ShadowRoot, objectUrls: string[]): void {
   for (const url of objectUrls) {
     URL.revokeObjectURL(url);
   }

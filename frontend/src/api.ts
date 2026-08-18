@@ -75,6 +75,7 @@ export interface StudyCard {
   progress: Progress;
   question_html: string;
   answer_html: string;
+  card_css: string | null;
   media: Media[];
   intervals: Record<"again" | "hard" | "good" | "easy", string>;
 }
@@ -111,6 +112,8 @@ export interface CardDetail {
   deck_name: string;
   question_html: string;
   answer_html: string;
+  card_css: string | null;
+  media: Media[];
   fields: Record<string, string>;
   front: string;
   back: string;

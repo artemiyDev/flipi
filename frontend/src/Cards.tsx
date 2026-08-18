@@ -18,6 +18,7 @@ import {
   type CardSearchItem,
   type Deck,
 } from "./api";
+import {CardBody} from "./CardBody";
 
 const PAGE_SIZE = 25;
 const FLAGS: CardFlag[] = ["red", "orange", "green", "blue", "purple"];
@@ -205,7 +206,7 @@ export function CardScreen({cardId, onBack, onDeleted, onUnauthorized}: {
   }
 
   return <section className="cards-screen"><header className="cards-header"><button className="close" aria-label="К списку карточек" onClick={onBack}>×</button><div><h1>{card.deck_name}</h1><span className="hint">{card.state}</span></div></header>
-    <section className="card-render"><div dangerouslySetInnerHTML={{__html: card.question_html}} /><hr /><div dangerouslySetInnerHTML={{__html: card.answer_html}} /></section>
+    <section className="card-render"><CardBody questionHtml={card.question_html} answerHtml={card.answer_html} cardCss={card.card_css} media={card.media} /></section>
     <section className="card-form"><label>Лицевая сторона<textarea value={front} onChange={(event) => setFront(event.target.value)} /></label><label>Обратная сторона<textarea value={back} onChange={(event) => setBack(event.target.value)} /></label><label>Теги <span className="hint">(через пробел)</span><input value={tags} onChange={(event) => setTags(event.target.value)} /></label><button className="primary" disabled={saving} onClick={save}>Сохранить</button></section>
     <section className="card-actions"><button onClick={() => action(() => setCardSuspended(card.card_id, !card.suspended), "Не удалось изменить состояние карточки.")}>{card.suspended ? "Вернуть" : "Приостановить"}</button><button onClick={() => action(() => buryCard(card.card_id), "Не удалось отложить карточку.")}>Отложить до завтра</button><label>Задать дату<input aria-label="Дата повторения" type="date" onChange={(event) => event.target.value && action(() => setCardDue(card.card_id, event.target.value), "Не удалось задать дату.")} /></label><div className="flag-actions"><span>Флаг</span>{FLAGS.map((flag) => <button className={`flag-${flag}`} key={flag} onClick={() => action(() => setCardFlag(card.card_id, flag), "Не удалось изменить флаг.")}>{flag}</button>)}{card.flag && <button onClick={() => action(() => setCardFlag(card.card_id, null), "Не удалось изменить флаг.")}>Снять</button>}</div><button onClick={() => { if (window.confirm("Сбросить прогресс карточки?")) action(() => resetCard(card.card_id), "Не удалось сбросить прогресс."); }}>Сбросить прогресс</button><button className="delete-button" onClick={remove}>Удалить заметку</button></section>
   </section>;

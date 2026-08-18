@@ -6,12 +6,12 @@ import zipfile
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.deps import get_current_user, get_db_session
-from bot.models import User
+from bot.models import NoteStyle, User
 from bot.services.apkg_importer import ImportedCard, parse_apkg_media, parse_apkg_notes
 from bot.services.cards import (
     bury_card_until_tomorrow,
@@ -68,6 +68,7 @@ from bot.services.study import (
     answer_card,
     count_done_today,
     get_next_card_for_user,
+    sanitize_card_css,
     sanitize_card_html,
 )
 
@@ -203,13 +204,31 @@ async def api_deck_or_404(session: AsyncSession, user: User, deck_id: int):
 
 async def card_response(session: AsyncSession, user: User, card) -> dict:
     decks_by_id = {deck.id: deck for deck in await list_all_user_decks(session, user)}
+    question_html = card_question_html(card)
+    answer_html = card_answer_html(card)
+    media_files = await get_media_files_by_names(
+        session, user, extract_media_references(question_html, answer_html)
+    )
     return {
         "card_id": card.id,
         "note_id": card.note_id,
         "deck_id": card.deck_id,
         "deck_name": deck_full_path(card.deck, decks_by_id),
-        "question_html": sanitize_card_html(card_question_html(card)),
-        "answer_html": sanitize_card_html(card_answer_html(card)),
+        "question_html": sanitize_card_html(
+            replace_image_media_references(question_html, media_files)
+        ),
+        "answer_html": sanitize_card_html(
+            replace_image_media_references(answer_html, media_files)
+        ),
+        "card_css": await get_card_css(session, user, card.note.anki_model_id),
+        "media": [
+            {
+                "id": media.id,
+                "name": media.original_name,
+                "content_type": media.content_type,
+            }
+            for media in media_files
+        ],
         "fields": card.note.fields or {},
         "front": card.note.front,
         "back": card.note.back,
@@ -222,6 +241,23 @@ async def card_response(session: AsyncSession, user: User, card) -> dict:
         "flag": card.flag,
         "template_ord": card.template_ord,
     }
+
+
+async def get_card_css(
+    session: AsyncSession,
+    user: User,
+    anki_model_id: str | None,
+) -> str | None:
+    if anki_model_id is None:
+        return None
+    result = await session.execute(
+        select(NoteStyle.css).where(
+            NoteStyle.user_id == user.id,
+            NoteStyle.anki_model_id == anki_model_id,
+        )
+    )
+    css = result.scalar_one_or_none()
+    return sanitize_card_css(css) if css is not None else None
 
 
 async def api_card_or_404(session: AsyncSession, user: User, card_id: int):
@@ -709,6 +745,7 @@ async def study_next(
         "answer_html": sanitize_card_html(
             replace_image_media_references(answer_html, media_files)
         ),
+        "card_css": await get_card_css(session, user, card.note.anki_model_id),
         "media": [
             {
                 "id": media.id,
