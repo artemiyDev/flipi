@@ -23,6 +23,8 @@ export interface DeckDetail {
   name: string;
   description: string | null;
   is_archived: boolean;
+  fsrs_optimized_at: string | null;
+  review_count: number;
   settings: DeckSettings;
   counts: Progress;
 }
@@ -258,6 +260,10 @@ export function createDeck(name: string, description?: string): Promise<DeckDeta
 
 export function fetchDeck(id: number): Promise<DeckDetail> {
   return request(`/decks/${id}`);
+}
+
+export function optimizeDeck(id: number): Promise<{review_count: number; optimized_at: string}> {
+  return request(`/decks/${id}/optimize`, {method: "POST", body: JSON.stringify({})});
 }
 
 export function renameDeck(id: number, name: string): Promise<DeckDetail> {

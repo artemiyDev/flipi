@@ -8,6 +8,7 @@ import {
   fetchArchivedDecks,
   fetchDeck,
   fetchDecks,
+  optimizeDeck,
   renameDeck,
   restoreDeck,
   shareDeck,
@@ -267,6 +268,8 @@ export function DeckScreen({deckId, onBack, onUnauthorized, onAddCard = () => un
   const [settingErrors, setSettingErrors] = useState<Partial<Record<SettingField, string>>>({});
   const [error, setError] = useState<Error | null>(null);
   const [shareHint, setShareHint] = useState<string | null>(null);
+  const [optimizerHint, setOptimizerHint] = useState<string | null>(null);
+  const [optimizing, setOptimizing] = useState(false);
 
   const load = useCallback(() => {
     setError(null);
@@ -389,6 +392,27 @@ export function DeckScreen({deckId, onBack, onUnauthorized, onAddCard = () => un
     });
   };
 
+  const optimize = () => {
+    if (!deck || deck.review_count < 400) {
+      return;
+    }
+    setOptimizerHint(null);
+    setOptimizing(true);
+    optimizeDeck(deck.id).then(() => fetchDeck(deck.id)).then(updateDeck).catch((requestError: unknown) => {
+      if (isUnauthorized(requestError)) {
+        onUnauthorized();
+      } else if (requestError instanceof ApiError && requestError.status === 503) {
+        setOptimizerHint("Недоступно на сервере");
+      } else {
+        setOptimizerHint("Не удалось оптимизировать");
+      }
+    }).finally(() => setOptimizing(false));
+  };
+
+  const optimizedDate = deck?.fsrs_optimized_at
+    ? new Intl.DateTimeFormat("ru-RU", {day: "2-digit", month: "2-digit", year: "numeric"}).format(new Date(deck.fsrs_optimized_at))
+    : null;
+
   if (error) {
     return <p className="hint centered">{error.message}</p>;
   }
@@ -421,6 +445,15 @@ export function DeckScreen({deckId, onBack, onUnauthorized, onAddCard = () => un
       <label className="toggle"><input checked={values.bury_siblings} type="checkbox" onChange={(event) => setValues({...values, bury_siblings: event.target.checked})} />Прятать парные карточки</label>
       <label className="toggle"><input checked={values.enable_fuzzing} type="checkbox" onChange={(event) => setValues({...values, enable_fuzzing: event.target.checked})} />Разброс интервалов</label>
       <button className="primary" onClick={saveSettings}>Сохранить</button>
+    </section>
+    <section className="settings-block scheduler-block"><h2>Планировщик</h2>
+      <p>История: {deck.review_count} повторений</p>
+      {optimizedDate && <p>Персонализирован · {optimizedDate}</p>}
+      <button className="primary" disabled={deck.review_count < 400 || optimizing} onClick={optimize}>
+        {optimizing ? "Оптимизирую…" : "Оптимизировать"}
+      </button>
+      {deck.review_count < 400 && <p className="hint">нужно ≥400 повторений</p>}
+      {optimizerHint && <p className="hint" role="status">{optimizerHint}</p>}
     </section>
     <button className="archive-button" onClick={archive}>В архив</button>
   </section>;

@@ -91,6 +91,7 @@ class Deck(Base):
     enable_fuzzing: Mapped[bool] = mapped_column(Boolean, default=True)
     option_preset: Mapped[str] = mapped_column(String(64), default="balanced")
     fsrs_parameters: Mapped[dict | None] = mapped_column(JSONB)
+    fsrs_optimized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow

@@ -62,6 +62,13 @@ from bot.services.decks import (
     update_deck_settings,
 )
 from bot.services.events import track
+from bot.services.optimizer import (
+    InsufficientHistoryError,
+    MINIMUM_REVIEW_COUNT,
+    OptimizerUnavailableError,
+    collect_deck_review_logs,
+    optimize_deck,
+)
 from bot.services.media import (
     extract_media_references,
     get_media_file,
@@ -179,11 +186,14 @@ class CardDueRequest(BaseModel):
 async def deck_detail(session: AsyncSession, user: User, deck) -> dict:
     decks_by_id = {item.id: item for item in await list_all_user_decks(session, user)}
     new_count, learning_count, review_count = await get_deck_counts(session, deck)
+    optimizer_review_count = len(await collect_deck_review_logs(session, deck))
     return {
         "id": deck.id,
         "name": deck_full_path(deck, decks_by_id),
         "description": deck.description,
         "is_archived": deck.is_archived,
+        "fsrs_optimized_at": deck.fsrs_optimized_at,
+        "review_count": optimizer_review_count,
         "settings": {
             "new_cards_per_day": deck.new_cards_per_day,
             "reviews_per_day": deck.reviews_per_day,
@@ -695,6 +705,33 @@ async def get_deck_endpoint(
 ) -> dict:
     deck = await api_deck_or_404(session, user, deck_id)
     return await deck_detail(session, user, deck)
+
+
+@router.post("/decks/{deck_id}/optimize")
+async def optimize_deck_endpoint(
+    deck_id: int,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> dict:
+    deck = await api_deck_or_404(session, user, deck_id)
+    try:
+        result = await optimize_deck(session, user, deck)
+    except InsufficientHistoryError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Недостаточно истории (нужно ≥{MINIMUM_REVIEW_COUNT} "
+                f"повторений, сейчас {exc.review_count})"
+            ),
+        ) from exc
+    except OptimizerUnavailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Оптимизатор недоступен на сервере",
+        ) from exc
+    await track(session, user.id, "fsrs_optimized", deck_id=deck.id, review_count=result["review_count"])
+    await session.commit()
+    return result
 
 
 @router.patch("/decks/{deck_id}")

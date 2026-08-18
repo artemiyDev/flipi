@@ -22,6 +22,7 @@ RUN apt-get update \
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch && pip install --no-cache-dir "fsrs[optimizer]"
 
 COPY bot ./bot
 COPY app ./app
