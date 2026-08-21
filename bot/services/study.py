@@ -1,6 +1,6 @@
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 
 import nh3
 from sqlalchemy import func, select
@@ -12,6 +12,7 @@ from bot.models import Card, ReviewLog, User
 from bot.services.cards import (
     bury_sibling_cards,
     get_next_due_card,
+    get_next_learn_ahead_card_for_user,
     increment_daily_counter,
 )
 from bot.services.decks import list_user_decks
@@ -100,12 +101,23 @@ def sanitize_card_css(value: str) -> str:
     return re.sub(r"behavior\s*:", "", sanitized, flags=re.IGNORECASE)
 
 
-async def get_next_card_for_user(session: AsyncSession, user: User) -> Card | None:
+async def get_next_card_for_user(
+    session: AsyncSession,
+    user: User,
+    now_utc: datetime | None = None,
+) -> Card | None:
+    now = now_utc or datetime.now(UTC)
     for deck in await list_user_decks(session, user):
-        card = await get_next_due_card(session, deck, user.timezone)
+        card = await get_next_due_card(
+            session,
+            deck,
+            user.timezone,
+            now,
+            include_learn_ahead=False,
+        )
         if card is not None:
             return card
-    return None
+    return await get_next_learn_ahead_card_for_user(session, user, now)
 
 
 async def answer_card(

@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from html import escape
 
 from aiogram import F, Router
@@ -17,6 +18,7 @@ from bot.services.cards import (
     get_next_due_card_by_query,
     get_next_new_card_without_limit,
     get_next_review_ahead_card,
+    learn_ahead_payload,
 )
 from bot.services.decks import get_deck, list_user_deck_display_choices
 from bot.services.leeches import LeechResumeConflictError, defer_leech, resume_leech
@@ -75,9 +77,10 @@ async def filtered_study_query(message: Message, state: FSMContext) -> None:
 
     async with async_session() as session:
         user = await get_or_create_user(session, message.from_user)
-        total_count = await count_cards_by_query(session, user, query)
-        due_count = await count_due_cards_by_query(session, user, query)
-        card = await get_next_due_card_by_query(session, user, query)
+        now_utc = datetime.now(UTC)
+        total_count = await count_cards_by_query(session, user, query, now_utc)
+        due_count = await count_due_cards_by_query(session, user, query, now_utc)
+        card = await get_next_due_card_by_query(session, user, query, now_utc)
         await state.update_data(study_scope="filter", filter_query=query)
         await state.set_state(None)
         if card is None:
@@ -89,7 +92,7 @@ async def filtered_study_query(message: Message, state: FSMContext) -> None:
         await message.answer(
             f"Фильтр: {query}\nНайдено карточек: {total_count}\nДоступно сейчас: {due_count}"
         )
-        await _send_card_question(message, session, user, card)
+        await _send_card_question(message, session, user, card, now_utc)
 
 
 @router.callback_query(F.data.startswith("study:start:"))
@@ -101,9 +104,10 @@ async def start_study(callback: CallbackQuery, state: FSMContext) -> None:
 
     async with async_session() as session:
         user = await get_or_create_user(session, callback.from_user)
+        now_utc = datetime.now(UTC)
         if scope == "all":
             await state.update_data(study_scope="all")
-            card = await _get_next_card_for_user(session, user)
+            card = await get_next_card_for_user(session, user, now_utc)
         else:
             deck_id = int(scope)
             await state.update_data(study_scope="deck", deck_id=deck_id)
@@ -111,11 +115,11 @@ async def start_study(callback: CallbackQuery, state: FSMContext) -> None:
             if deck is None:
                 await callback.message.answer("Колода не найдена.")
                 return
-            card = await get_next_due_card(session, deck, user.timezone)
+            card = await get_next_due_card(session, deck, user.timezone, now_utc)
         if card is None:
             await callback.message.answer("На сейчас карточек нет. Можно добавить новые или вернуться позже.")
             return
-        await _send_card_question(callback.message, session, user, card)
+        await _send_card_question(callback.message, session, user, card, now_utc)
 
 
 @router.callback_query(F.data.startswith("study:ahead:"))
@@ -224,12 +228,13 @@ async def rate_study_card(callback: CallbackQuery, state: FSMContext) -> None:
         if result.replayed:
             return
 
-        next_card = await _next_card_for_scope(session, user, card, state)
+        now_utc = datetime.now(UTC)
+        next_card = await _next_card_for_scope(session, user, card, state, now_utc)
         if next_card is None:
             await callback.message.answer("Готово. На сейчас карточек нет.")
             return
 
-        await _send_card_question(callback.message, session, user, next_card)
+        await _send_card_question(callback.message, session, user, next_card, now_utc)
 
 
 @router.callback_query(F.data.startswith("leech:resume:"))
@@ -265,11 +270,12 @@ async def resume_leech_study(callback: CallbackQuery, state: FSMContext) -> None
         if card is None:
             await callback.message.answer("Карточка не найдена.")
             return
-        next_card = await _next_card_for_scope(session, user, card, state)
+        now_utc = datetime.now(UTC)
+        next_card = await _next_card_for_scope(session, user, card, state, now_utc)
         if next_card is None:
             await callback.message.answer("Готово. На сейчас карточек нет.")
             return
-        await _send_card_question(callback.message, session, user, next_card)
+        await _send_card_question(callback.message, session, user, next_card, now_utc)
 
 
 @router.callback_query(F.data.startswith("leech:later:"))
@@ -304,24 +310,36 @@ async def leave_leech_for_later(callback: CallbackQuery, state: FSMContext) -> N
         if card is None:
             await callback.message.answer("Карточка не найдена.")
             return
-        next_card = await _next_card_for_scope(session, user, card, state)
+        now_utc = datetime.now(UTC)
+        next_card = await _next_card_for_scope(session, user, card, state, now_utc)
         if next_card is None:
             await callback.message.answer("Готово. На сейчас карточек нет.")
             return
-        await _send_card_question(callback.message, session, user, next_card)
+        await _send_card_question(callback.message, session, user, next_card, now_utc)
 
 
-async def _next_card_for_scope(session, user, card, state: FSMContext):
+async def _next_card_for_scope(
+    session,
+    user,
+    card,
+    state: FSMContext,
+    now_utc: datetime,
+):
     data = await state.get_data()
     if data.get("study_scope") == "all":
-        return await get_next_card_for_user(session, user)
+        return await get_next_card_for_user(session, user, now_utc)
     if data.get("study_scope") == "filter":
-        return await get_next_due_card_by_query(session, user, data.get("filter_query", ""))
+        return await get_next_due_card_by_query(
+            session,
+            user,
+            data.get("filter_query", ""),
+            now_utc,
+        )
     if data.get("study_scope") == "review_ahead":
         return await get_next_review_ahead_card(session, card.deck, user.timezone)
     if data.get("study_scope") == "new_without_limit":
         return await get_next_new_card_without_limit(session, card.deck, user.timezone)
-    return await get_next_due_card(session, card.deck, user.timezone)
+    return await get_next_due_card(session, card.deck, user.timezone, now_utc)
 
 
 def _leech_text(review_lapses: int) -> str:
@@ -346,9 +364,27 @@ def _answer_text(card) -> str:
     )
 
 
-async def _send_card_question(message: Message, session, user, card) -> None:
+async def _send_card_question(
+    message: Message,
+    session,
+    user,
+    card,
+    now_utc: datetime | None = None,
+) -> None:
     await _send_media_for_texts(message, session, user, card_question(card))
-    await message.answer(_question_text(card.deck.name, card), reply_markup=show_answer(card.id))
+    question = _question_text(card.deck.name, card)
+    hint = _learn_ahead_hint(card, now_utc or datetime.now(UTC))
+    if hint is not None:
+        question = f"{hint}\n\n{question}"
+    await message.answer(question, reply_markup=show_answer(card.id))
+
+
+def _learn_ahead_hint(card, now_utc: datetime) -> str | None:
+    payload = learn_ahead_payload(card, now_utc)
+    if payload is None:
+        return None
+    minutes = max(1, (int(payload["seconds_early"]) + 59) // 60)
+    return f"Повтор чуть раньше · через {minutes} мин"
 
 
 async def _send_card_answer(message: Message, session, user, card) -> None:

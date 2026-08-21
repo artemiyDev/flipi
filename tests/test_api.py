@@ -458,7 +458,8 @@ def test_study_answer_records_review_buries_siblings_and_returns_media(session_f
     assert response.status_code == 200
     assert response.json()["ok"] is True
     assert response.json()["state"] in {"learning", "review"}
-    assert next_response.json()["card_id"] is None
+    assert next_response.json()["card_id"] == card_id
+    assert next_response.json()["learn_ahead"]["seconds_early"] > 0
 
     foreign_response = post_request(
         app,
@@ -566,13 +567,16 @@ def test_again_is_counted_once_and_keeps_today_learning_step_in_global_goal(
     assert first_answer.json()["replayed"] is False
     assert replayed_answer.status_code == 200
     assert replayed_answer.json()["replayed"] is True
-    assert next_response.json() == {
-        "card_id": None,
-        "done_today": 1,
-        "goals": {
-            "streak": {"done": 0, "target": 10, "achieved": False},
-            "full": {"remaining": 1, "achieved": False},
-        },
+    next_payload = next_response.json()
+    assert next_payload["card_id"] == card_id
+    assert next_payload["learn_ahead"] == {
+        "scheduled_for": "2026-03-10T12:01:00Z",
+        "seconds_early": 60,
+    }
+    assert next_payload["progress"] == {"new": 0, "learning": 1, "review": 0}
+    assert next_payload["goals"] == {
+        "streak": {"done": 0, "target": 10, "achieved": False},
+        "full": {"remaining": 1, "achieved": False},
     }
 
     async def persisted_state() -> tuple[int, int, str, int, int]:
@@ -639,6 +643,15 @@ def test_study_next_all_iterates_decks_then_reports_done_today(session_factory, 
     post_request(app, "/api/study/answer", {"card_id": first["card_id"], "rating": 3}, headers)
     second = request(app, "/api/study/next?deck_id=all", headers).json()
     post_request(app, "/api/study/answer", {"card_id": second["card_id"], "rating": 3}, headers)
+
+    async def move_learning_steps_outside_window() -> None:
+        async with session_factory() as session:
+            cards = list((await session.scalars(select(Card))).all())
+            for card in cards:
+                card.due_at = datetime.now(UTC) + timedelta(minutes=21)
+            await session.commit()
+
+    asyncio.run(move_learning_steps_outside_window())
     done = request(app, "/api/study/next?deck_id=all", headers)
 
     assert first["deck_name"] == "Alpha"

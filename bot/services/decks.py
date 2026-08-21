@@ -1,13 +1,15 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from collections.abc import Mapping
 from typing import Any
 
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.models import Card, Deck, Note, ReviewLog, User
+from bot.services.cards import LEARN_AHEAD_MINUTES
+from bot.services.timezones import user_local_date
 
 DECK_OPTION_PRESETS = {
     "light": {
@@ -349,19 +351,30 @@ async def get_any_deck(session: AsyncSession, user: User, deck_id: int) -> Deck 
     return result.scalar_one_or_none()
 
 
-async def get_deck_counts(session: AsyncSession, deck: Deck) -> tuple[int, int, int]:
-    now = datetime.now(UTC)
+async def get_deck_counts(
+    session: AsyncSession,
+    deck: Deck,
+    timezone_name: str = "UTC",
+    now_utc: datetime | None = None,
+) -> tuple[int, int, int]:
+    now = now_utc or datetime.now(UTC)
+    today = user_local_date(now, timezone_name)
     counts = []
-    for clause in (
-        Card.state == "new",
-        Card.state.in_(["learning", "relearning"]),
-        Card.state == "review",
+    for clause, due_before in (
+        (Card.state == "new", now),
+        (
+            Card.state.in_(["learning", "relearning"]),
+            now + timedelta(minutes=LEARN_AHEAD_MINUTES),
+        ),
+        (Card.state == "review", now),
     ):
         result = await session.execute(
             select(func.count(Card.id)).where(
                 Card.deck_id == deck.id,
+                Card.user_id == deck.user_id,
                 Card.suspended.is_(False),
-                Card.due_at <= now,
+                or_(Card.buried_until.is_(None), Card.buried_until < today),
+                Card.due_at <= due_before,
                 clause,
             )
         )
@@ -372,13 +385,20 @@ async def get_deck_counts(session: AsyncSession, deck: Deck) -> tuple[int, int, 
 async def deck_list_with_counts(
     session: AsyncSession,
     user: User,
+    now_utc: datetime | None = None,
 ) -> list[tuple[int, str, int, int, int]]:
+    now = now_utc or datetime.now(UTC)
     all_decks = await _list_all_user_decks(session, user)
     decks = [deck for deck in all_decks if not deck.is_archived]
     rows = []
     decks_by_id = {deck.id: deck for deck in all_decks}
     for deck in decks:
-        new_count, learning_count, review_count = await get_deck_counts(session, deck)
+        new_count, learning_count, review_count = await get_deck_counts(
+            session,
+            deck,
+            user.timezone,
+            now,
+        )
         rows.append(
             (
                 deck.id,
@@ -401,7 +421,12 @@ async def deck_summary(session: AsyncSession, deck: Deck) -> dict[str, int]:
     for key, query in queries.items():
         result = await session.execute(query)
         summary[key] = int(result.scalar_one())
-    new_count, learning_count, review_count = await get_deck_counts(session, deck)
+    timezone_name = await session.scalar(select(User.timezone).where(User.id == deck.user_id))
+    new_count, learning_count, review_count = await get_deck_counts(
+        session,
+        deck,
+        timezone_name or "UTC",
+    )
     summary.update(
         {
             "new": new_count,

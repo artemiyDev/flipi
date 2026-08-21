@@ -26,6 +26,7 @@ from bot.services.cards import (
     get_card,
     get_next_due_card,
     get_note,
+    learn_ahead_payload,
     reset_card,
     search_cards_page,
     set_card_due_date,
@@ -209,7 +210,11 @@ class CardDueRequest(BaseModel):
 
 async def deck_detail(session: AsyncSession, user: User, deck) -> dict:
     decks_by_id = {item.id: item for item in await list_all_user_decks(session, user)}
-    new_count, learning_count, review_count = await get_deck_counts(session, deck)
+    new_count, learning_count, review_count = await get_deck_counts(
+        session,
+        deck,
+        user.timezone,
+    )
     optimizer_review_count = len(await collect_deck_review_logs(session, deck))
     return {
         "id": deck.id,
@@ -908,7 +913,7 @@ async def study_next(
 ) -> dict:
     now_utc = datetime.now(UTC)
     if deck_id == "all":
-        card = await get_next_card_for_user(session, user)
+        card = await get_next_card_for_user(session, user, now_utc)
     else:
         try:
             parsed_deck_id = int(deck_id)
@@ -917,7 +922,7 @@ async def study_next(
         deck = await get_deck(session, user, parsed_deck_id)
         if deck is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deck not found")
-        card = await get_next_due_card(session, deck, user.timezone)
+        card = await get_next_due_card(session, deck, user.timezone, now_utc)
 
     goals = await daily_goal_progress(session, user, now_utc)
     if card is None:
@@ -933,7 +938,12 @@ async def study_next(
         session, user, extract_media_references(question_html, answer_html)
     )
     decks_by_id = {deck.id: deck for deck in await list_user_decks(session, user)}
-    new_count, learning_count, review_count = await get_deck_counts(session, card.deck)
+    new_count, learning_count, review_count = await get_deck_counts(
+        session,
+        card.deck,
+        user.timezone,
+        now_utc,
+    )
     return {
         "card_id": card.id,
         "deck_id": card.deck_id,
@@ -944,6 +954,7 @@ async def study_next(
             "review": review_count,
         },
         "goals": goals,
+        "learn_ahead": learn_ahead_payload(card, now_utc),
         "question_html": sanitize_card_html(
             replace_image_media_references(question_html, media_files)
         ),

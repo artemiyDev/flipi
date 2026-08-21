@@ -59,6 +59,11 @@ function GoalStatus({goals}: {goals: DailyGoals}): JSX.Element {
   </div>;
 }
 
+function learnAheadMinutes(secondsEarly: number): number {
+  const safeSeconds = Number.isFinite(secondsEarly) ? Math.max(0, secondsEarly) : 0;
+  return Math.max(1, Math.ceil(safeSeconds / 60));
+}
+
 function StudyDecks({onStudy, onCreateDeck, onCatalog, onUnauthorized}: {onStudy: (deckId: number | "all") => void; onCreateDeck: () => void; onCatalog: () => void; onUnauthorized: () => void}): JSX.Element {
   const [decks, setDecks] = useState<Deck[] | null>(null);
   const [error, setError] = useState<Error | null>(null);
@@ -329,6 +334,9 @@ function Session({deckId, onClose, onEditCard, onUnauthorized}: {
       <ProgressCounts progress={card.progress} />
       <GoalStatus goals={card.goals} />
     </header>
+    {card.learn_ahead !== null && <p className="learn-ahead-hint">
+      Повтор чуть раньше · через {learnAheadMinutes(card.learn_ahead.seconds_early)} мин
+    </p>}
     <CardBody questionHtml={card.question_html} answerHtml={showAnswer ? card.answer_html : undefined} cardCss={card.card_css} media={card.media} />
     {leechRescue !== null ? <section className="leech-rescue" aria-busy={leechActionPending} aria-labelledby="leech-rescue-title">
       <h2 id="leech-rescue-title">Карточка забыта {leechRescue.alert.review_lapses} раза</h2>
