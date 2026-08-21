@@ -42,6 +42,18 @@ export interface Progress {
   review: number;
 }
 
+export interface DailyGoals {
+  streak: {
+    done: number;
+    target: number;
+    achieved: boolean;
+  };
+  full: {
+    remaining: number;
+    achieved: boolean;
+  };
+}
+
 export interface Media {
   id: number;
   name: string;
@@ -75,6 +87,7 @@ export interface StudyCard {
   deck_id: number;
   deck_name: string;
   progress: Progress;
+  goals: DailyGoals;
   question_html: string;
   answer_html: string;
   card_css: string | null;
@@ -85,6 +98,7 @@ export interface StudyCard {
 export interface StudyDone {
   card_id: null;
   done_today: number;
+  goals: DailyGoals;
 }
 
 export interface CardSearchItem {

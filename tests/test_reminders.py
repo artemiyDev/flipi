@@ -128,17 +128,20 @@ def test_sender_continues_after_failure_and_marks_every_attempt(session_factory)
             second = await _user(session, 13)
             await _due_card(session, first)
             second_card = await _due_card(session, second)
-            session.add(
-                ReviewLog(
-                    user_id=second.id,
-                    deck_id=second_card.deck_id,
-                    card_id=second_card.id,
-                    rating=3,
-                    reviewed_at=NOW - timedelta(days=1),
-                    elapsed_ms=100,
-                    previous_due_at=NOW - timedelta(days=2),
-                    next_due_at=NOW,
-                )
+            session.add_all(
+                [
+                    ReviewLog(
+                        user_id=second.id,
+                        deck_id=second_card.deck_id,
+                        card_id=second_card.id,
+                        rating=3,
+                        reviewed_at=NOW - timedelta(days=1, minutes=minute),
+                        elapsed_ms=100,
+                        previous_due_at=NOW - timedelta(days=2),
+                        next_due_at=NOW,
+                    )
+                    for minute in range(10)
+                ]
             )
             await session.commit()
         bot = FakeBot()

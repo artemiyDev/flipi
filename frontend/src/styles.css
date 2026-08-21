@@ -26,7 +26,11 @@ nav .active { color: var(--tg-button-color); }
 .app-header button { width: 28px; height: 28px; border-radius: 50%; font-weight: bold; }
 .empty-actions { display: flex; justify-content: center; gap: 8px; }
 .empty-actions button { padding: 10px 12px; border-radius: 8px; }
-.session-header { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; margin-bottom: 24px; }
+.session-header { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: center; margin-bottom: 24px; min-width: 0; }
+.session-deck-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.daily-goals { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; min-width: 0; font-size: 13px; color: var(--tg-hint-color); }
+.daily-goals span { min-width: 0; overflow-wrap: anywhere; }
+.session-header > .daily-goals { grid-column: 1 / -1; }
 .close { font-size: 28px; line-height: 1; padding: 0 4px; }
 .card-content { min-height: 40vh; padding: 16px; margin-bottom: 16px; background: var(--tg-secondary-bg-color); overflow-wrap: anywhere; }
 .card-content img, .card-content audio { max-width: 100%; display: block; margin: 12px auto; }
@@ -35,6 +39,8 @@ nav .active { color: var(--tg-button-color); }
 .ratings button { padding: 10px 4px; border-radius: 8px; }
 .ratings small { display: block; margin-top: 4px; color: var(--tg-hint-color); }
 .done { min-height: 80vh; display: grid; place-content: center; gap: 16px; text-align: center; }
+.done-title { margin: 0; font-size: 20px; }
+.done .daily-goals { width: min(100%, 360px); }
 .stats { max-width: 640px; margin: 0 auto; }
 .stats-block { padding: 16px 0; border-bottom: 1px solid var(--tg-hint-color); }
 .stats-block h2 { margin: 0 0 12px; font-size: 17px; }

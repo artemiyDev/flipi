@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.models import Card, Deck, Note, ReviewLog, User
 from bot.services.decks import deck_list_with_counts
+from bot.services.goals import STREAK_TARGET
 from bot.services.study import count_done_today
 from bot.services.timezones import user_day_start_utc, user_local_date, user_today
 
@@ -207,15 +208,24 @@ async def forecast_due_counts(
 
 async def streak_days(session: AsyncSession, user: User, today: date) -> int:
     reviewed_at_result = await session.execute(
-        select(ReviewLog.reviewed_at).where(ReviewLog.user_id == user.id)
+        select(ReviewLog.reviewed_at).where(
+            ReviewLog.user_id == user.id,
+            ReviewLog.rating.in_([2, 3, 4]),
+        )
     )
-    review_days = {
-        user_local_date(reviewed_at, user.timezone)
-        for (reviewed_at,) in reviewed_at_result.all()
+    successful_by_day: dict[date, int] = {}
+    for (reviewed_at,) in reviewed_at_result.all():
+        local_day = user_local_date(reviewed_at, user.timezone)
+        successful_by_day[local_day] = successful_by_day.get(local_day, 0) + 1
+
+    achieved_days = {
+        local_day
+        for local_day, success_count in successful_by_day.items()
+        if success_count >= STREAK_TARGET
     }
-    current_day = today if today in review_days else today - timedelta(days=1)
+    current_day = today if today in achieved_days else today - timedelta(days=1)
     streak = 0
-    while current_day in review_days:
+    while current_day in achieved_days:
         streak += 1
         current_day -= timedelta(days=1)
     return streak

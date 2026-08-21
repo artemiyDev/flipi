@@ -5,6 +5,7 @@ import {
   fetchDecks,
   fetchNextCard,
   submitAnswer,
+  type DailyGoals,
   type Deck,
   type NextCard,
   type Progress,
@@ -33,6 +34,16 @@ function ProgressCounts({progress}: {progress: Progress}): JSX.Element {
     <span className="count-learning">{progress.learning}</span>
     <span className="count-review">{progress.review}</span>
   </span>;
+}
+
+function GoalStatus({goals}: {goals: DailyGoals}): JSX.Element {
+  const streak = `Серия ${goals.streak.done}/${goals.streak.target}${goals.streak.achieved ? " ✓" : ""}`;
+  const full = goals.full.achieved ? "День закрыт ✓" : `На сегодня осталось ${goals.full.remaining}`;
+
+  return <div className="daily-goals">
+    <span>{streak}</span>
+    <span>{full}</span>
+  </div>;
 }
 
 function StudyDecks({onStudy, onCreateDeck, onCatalog, onUnauthorized}: {onStudy: (deckId: number | "all") => void; onCreateDeck: () => void; onCatalog: () => void; onUnauthorized: () => void}): JSX.Element {
@@ -138,7 +149,14 @@ function Session({deckId, onClose, onUnauthorized}: {deckId: number | "all"; onC
     return <p className="hint centered">Загрузка…</p>;
   }
   if (next.card_id === null) {
-    return <section className="done"><p>Готово. Сегодня: {next.done_today}</p><button className="primary" onClick={onClose}>К колодам</button></section>;
+    const message = deckId === "all"
+      ? (next.goals.full.achieved ? "На сегодня всё" : `Пока всё. Сегодня ещё ${next.goals.full.remaining}`)
+      : "В этой колоде пока всё";
+    return <section className="done">
+      <p className="done-title">{message}</p>
+      <GoalStatus goals={next.goals} />
+      <button className="primary" onClick={onClose}>К колодам</button>
+    </section>;
   }
 
   const card = next as StudyCard;
@@ -193,7 +211,12 @@ function Session({deckId, onClose, onUnauthorized}: {deckId: number | "all"; onC
   ];
 
   return <section className="session">
-    <header className="session-header"><button className="close" aria-label="К колодам" disabled={answerAttempt !== null} onClick={onClose}>×</button><span>{card.deck_name}</span><ProgressCounts progress={card.progress} /></header>
+    <header className="session-header">
+      <button className="close" aria-label="К колодам" disabled={answerAttempt !== null} onClick={onClose}>×</button>
+      <span className="session-deck-name" title={card.deck_name}>{card.deck_name}</span>
+      <ProgressCounts progress={card.progress} />
+      <GoalStatus goals={card.goals} />
+    </header>
     <CardBody questionHtml={card.question_html} answerHtml={showAnswer ? card.answer_html : undefined} cardCss={card.card_css} media={card.media} />
     {!showAnswer ? <button className="primary wide" onClick={() => setShowAnswer(true)}>Показать ответ</button> :
       <>
