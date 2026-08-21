@@ -181,6 +181,9 @@ class NoteStyle(Base):
 
 class Card(Base):
     __tablename__ = "cards"
+    __table_args__ = (
+        Index("ix_cards_user_review_lapses", "user_id", "review_lapses"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
@@ -199,6 +202,8 @@ class Card(Base):
     flag: Mapped[str | None] = mapped_column(String(32))
     reps: Mapped[int] = mapped_column(Integer, default=0)
     lapses: Mapped[int] = mapped_column(Integer, default=0)
+    review_lapses: Mapped[int] = mapped_column(Integer, default=0)
+    leech_suspended_lapses: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
@@ -234,6 +239,7 @@ class ReviewLog(Base):
     fsrs_review_log: Mapped[dict | None] = mapped_column(JSONB)
     request_id: Mapped[str | None] = mapped_column(String(64))
     state_after: Mapped[str | None] = mapped_column(String(32))
+    leech_alert_lapses: Mapped[int | None] = mapped_column(Integer)
 
     card: Mapped[Card] = relationship(back_populates="reviews")
 

@@ -9,6 +9,7 @@ from bot.models import Card, Note, ReviewLog, User
 from bot.services.apkg_importer import ImportedMedia
 from bot.services.cards import note_exists
 from bot.services.decks import get_or_create_deck
+from bot.services.leeches import is_leech_alert_count
 from bot.services.media import save_imported_media_files
 from bot.services.scheduler import new_fsrs_card_json
 from bot.services.timezones import normalize_timezone
@@ -98,6 +99,17 @@ async def restore_user_backup_json(
                 {"direction": "front_back", "state": "new", "fsrs_data": new_fsrs_card_json()}
             ]
             for card_payload in cards_payload:
+                suspended = bool(card_payload.get("suspended", False))
+                review_lapses = int(card_payload.get("review_lapses", 0) or 0)
+                leech_suspended_lapses = _parse_optional_int(
+                    card_payload.get("leech_suspended_lapses")
+                )
+                if (
+                    not suspended
+                    or leech_suspended_lapses != review_lapses
+                    or not is_leech_alert_count(review_lapses)
+                ):
+                    leech_suspended_lapses = None
                 card = Card(
                     user_id=user.id,
                     deck_id=deck.id,
@@ -110,11 +122,13 @@ async def restore_user_backup_json(
                     due_at=_parse_datetime(card_payload.get("due_at")),
                     state=str(card_payload.get("state") or "new"),
                     fsrs_data=card_payload.get("fsrs_data") or new_fsrs_card_json(),
-                    suspended=bool(card_payload.get("suspended", False)),
+                    suspended=suspended,
                     buried_until=_parse_date(card_payload.get("buried_until")),
                     flag=card_payload.get("flag"),
                     reps=int(card_payload.get("reps", 0)),
                     lapses=int(card_payload.get("lapses", 0)),
+                    review_lapses=review_lapses,
+                    leech_suspended_lapses=leech_suspended_lapses,
                 )
                 session.add(card)
                 await session.flush()
@@ -134,6 +148,9 @@ async def restore_user_backup_json(
                             ),
                             next_due_at=_parse_datetime(review_payload.get("next_due_at")),
                             fsrs_review_log=review_payload.get("fsrs_review_log"),
+                            leech_alert_lapses=_parse_optional_int(
+                                review_payload.get("leech_alert_lapses")
+                            ),
                         )
                     )
                     stats["reviews"] += 1
@@ -189,3 +206,9 @@ def _parse_date(value: Any) -> date | None:
     if not value:
         return None
     return date.fromisoformat(str(value))
+
+
+def _parse_optional_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    return int(value)

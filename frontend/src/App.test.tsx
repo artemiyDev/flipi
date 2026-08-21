@@ -4,8 +4,11 @@ import {beforeEach, describe, expect, it, vi} from "vitest";
 import {App} from "./App";
 
 const apiMocks = vi.hoisted(() => ({
+  deferLeech: vi.fn(),
+  fetchCard: vi.fn(),
   fetchDecks: vi.fn(),
   fetchNextCard: vi.fn(),
+  resumeLeech: vi.fn(),
   submitAnswer: vi.fn(),
 }));
 
@@ -35,16 +38,49 @@ function studyDone(goals = dailyGoals(), doneToday = 1) {
   return {card_id: null, done_today: doneToday, goals};
 }
 
+function answerResult(leech: {review_lapses: number; auto_suspended: true} | null = null, replayed = false) {
+  return {ok: true as const, state: "review", due: "2026-01-01T00:00:00Z", replayed, leech};
+}
+
+const cardDetail = {
+  card_id: 7,
+  note_id: 8,
+  deck_id: 1,
+  deck_name: "Spanish",
+  question_html: "<b>Question</b>",
+  answer_html: "<i>Answer</i>",
+  card_css: null,
+  media: [],
+  fields: {},
+  front: "Question",
+  back: "Answer",
+  tags: [],
+  state: "relearning",
+  due: "2026-01-01T00:00:00Z",
+  lapses: 4,
+  review_lapses: 4,
+  is_leech: true,
+  suspended: true,
+  buried_until: null,
+  flag: null,
+};
+
 vi.mock("./api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./api")>()),
+  deferLeech: apiMocks.deferLeech,
+  fetchCard: apiMocks.fetchCard,
   fetchDecks: apiMocks.fetchDecks,
   fetchNextCard: apiMocks.fetchNextCard,
+  resumeLeech: apiMocks.resumeLeech,
   submitAnswer: apiMocks.submitAnswer,
 }));
 
 describe("Mini App", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    apiMocks.deferLeech.mockResolvedValue({ok: true});
+    apiMocks.fetchCard.mockResolvedValue(cardDetail);
+    apiMocks.resumeLeech.mockResolvedValue({ok: true});
   });
 
   it("renders deck counts, study all, and an empty state", async () => {
@@ -116,7 +152,7 @@ describe("Mini App", () => {
     apiMocks.fetchNextCard
       .mockResolvedValueOnce(studyCard())
       .mockResolvedValueOnce(studyDone(dailyGoals(10, 0), 9));
-    apiMocks.submitAnswer.mockResolvedValue({ok: true, state: "review", due: "2026-01-01T00:00:00Z"});
+    apiMocks.submitAnswer.mockResolvedValue(answerResult());
     const {container} = render(<App />);
 
     fireEvent.click(await screen.findByText("Spanish"));
@@ -140,7 +176,7 @@ describe("Mini App", () => {
       .mockReturnValueOnce(new Promise((resolve) => {
         resolveNext = resolve;
       }));
-    apiMocks.submitAnswer.mockResolvedValue({ok: true, state: "review", due: "2026-01-01T00:00:00Z", replayed: false});
+    apiMocks.submitAnswer.mockResolvedValue(answerResult());
     render(<App />);
 
     fireEvent.click(await screen.findByText("Spanish"));
@@ -164,7 +200,7 @@ describe("Mini App", () => {
     apiMocks.fetchNextCard
       .mockResolvedValueOnce(studyCard())
       .mockResolvedValueOnce(studyDone());
-    let resolveAnswer: (value: {ok: true; state: string; due: string; replayed: boolean}) => void = () => undefined;
+    let resolveAnswer: (value: ReturnType<typeof answerResult>) => void = () => undefined;
     apiMocks.submitAnswer.mockReturnValue(new Promise((resolve) => {
       resolveAnswer = resolve;
     }));
@@ -191,7 +227,7 @@ describe("Mini App", () => {
     expect(screen.getByRole("button", {name: "К колодам"})).toBeDisabled();
 
     await act(async () => {
-      resolveAnswer({ok: true, state: "review", due: "2026-01-01T00:00:00Z", replayed: false});
+      resolveAnswer(answerResult());
     });
     expect(await screen.findByText("В этой колоде пока всё")).toBeInTheDocument();
   });
@@ -203,7 +239,7 @@ describe("Mini App", () => {
       .mockResolvedValueOnce(studyDone());
     apiMocks.submitAnswer
       .mockRejectedValueOnce(new Error("network"))
-      .mockResolvedValueOnce({ok: true, state: "review", due: "2026-01-01T00:00:00Z", replayed: true});
+      .mockResolvedValueOnce(answerResult(null, true));
     render(<App />);
 
     fireEvent.click(await screen.findByText("Spanish"));
@@ -229,8 +265,8 @@ describe("Mini App", () => {
       .mockRejectedValueOnce(new Error("network"))
       .mockResolvedValueOnce(studyDone());
     apiMocks.submitAnswer
-      .mockResolvedValueOnce({ok: true, state: "review", due: "2026-01-01T00:00:00Z", replayed: false})
-      .mockResolvedValueOnce({ok: true, state: "review", due: "2026-01-01T00:00:00Z", replayed: true});
+      .mockResolvedValueOnce(answerResult())
+      .mockResolvedValueOnce(answerResult(null, true));
     render(<App />);
 
     fireEvent.click(await screen.findByText("Spanish"));
@@ -244,6 +280,198 @@ describe("Mini App", () => {
     await waitFor(() => expect(apiMocks.submitAnswer).toHaveBeenCalledTimes(2));
     expect(apiMocks.submitAnswer.mock.calls[1]).toEqual(firstPayload);
     expect(await screen.findByText("В этой колоде пока всё")).toBeInTheDocument();
+  });
+
+  it("shows the same leech rescue after an ambiguous answer retry before loading next", async () => {
+    apiMocks.fetchDecks.mockResolvedValue([{id: 1, name: "Spanish", new_count: 1, learning_count: 0, review_count: 0}]);
+    apiMocks.fetchNextCard
+      .mockResolvedValueOnce(studyCard())
+      .mockResolvedValueOnce(studyDone());
+    apiMocks.submitAnswer
+      .mockRejectedValueOnce(new Error("network"))
+      .mockResolvedValueOnce(answerResult({review_lapses: 4, auto_suspended: true}, true));
+    const {container} = render(<App />);
+
+    fireEvent.click(await screen.findByText("Spanish"));
+    fireEvent.click(await screen.findByText("Показать ответ"));
+    fireEvent.click(await screen.findByRole("button", {name: /Снова/}));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Не удалось подтвердить ответ");
+    const firstPayload = apiMocks.submitAnswer.mock.calls[0];
+
+    fireEvent.click(screen.getByRole("button", {name: "Повторить отправку"}));
+
+    expect(await screen.findByRole("heading", {name: "Карточка забыта 4 раза"})).toBeInTheDocument();
+    expect(container.querySelector(".card-content")?.shadowRoot?.textContent).toContain("Answer");
+    expect(apiMocks.submitAnswer.mock.calls[1]).toEqual(firstPayload);
+    expect(apiMocks.fetchNextCard).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", {name: "К колодам"})).toBeDisabled();
+    expect(screen.queryByRole("button", {name: /Снова/})).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", {name: "Оставить на потом"}));
+    expect(await screen.findByText("В этой колоде пока всё")).toBeInTheDocument();
+    expect(apiMocks.deferLeech).toHaveBeenCalledWith(7, 4);
+    expect(apiMocks.resumeLeech).not.toHaveBeenCalled();
+  });
+
+  it("handles a guarded resume conflict without retrying the answer", async () => {
+    const {ApiError} = await import("./api");
+    apiMocks.fetchDecks.mockResolvedValue([{id: 1, name: "Spanish", new_count: 1, learning_count: 0, review_count: 0}]);
+    apiMocks.fetchNextCard
+      .mockResolvedValueOnce(studyCard())
+      .mockResolvedValueOnce(studyDone());
+    apiMocks.submitAnswer.mockResolvedValue(answerResult({review_lapses: 6, auto_suspended: true}));
+    apiMocks.resumeLeech.mockRejectedValueOnce(new ApiError(409));
+    render(<App />);
+
+    fireEvent.click(await screen.findByText("Spanish"));
+    fireEvent.click(await screen.findByText("Показать ответ"));
+    fireEvent.click(await screen.findByRole("button", {name: /Снова/}));
+    fireEvent.click(await screen.findByRole("button", {name: "Продолжить учить"}));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Карточка уже изменилась");
+    expect(apiMocks.resumeLeech).toHaveBeenCalledWith(7, 6);
+    expect(apiMocks.fetchNextCard).toHaveBeenCalledTimes(1);
+    expect(apiMocks.submitAnswer).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", {name: "Продолжить учить"})).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", {name: "Оставить на потом"}));
+    expect(await screen.findByText("В этой колоде пока всё")).toBeInTheDocument();
+    expect(apiMocks.resumeLeech).toHaveBeenCalledTimes(1);
+    expect(apiMocks.deferLeech).toHaveBeenCalledWith(7, 6);
+    expect(apiMocks.submitAnswer).toHaveBeenCalledTimes(1);
+  });
+
+  it("locks rescue actions during guarded resume", async () => {
+    apiMocks.fetchDecks.mockResolvedValue([{id: 1, name: "Spanish", new_count: 1, learning_count: 0, review_count: 0}]);
+    apiMocks.fetchNextCard
+      .mockResolvedValueOnce(studyCard())
+      .mockResolvedValueOnce(studyDone());
+    apiMocks.submitAnswer.mockResolvedValue(answerResult({review_lapses: 4, auto_suspended: true}));
+    let resolveResume: (value: {ok: true}) => void = () => undefined;
+    apiMocks.resumeLeech.mockReturnValue(new Promise((resolve) => {
+      resolveResume = resolve;
+    }));
+    render(<App />);
+
+    fireEvent.click(await screen.findByText("Spanish"));
+    fireEvent.click(await screen.findByText("Показать ответ"));
+    fireEvent.click(await screen.findByRole("button", {name: /Снова/}));
+    const continueButton = await screen.findByRole("button", {name: "Продолжить учить"});
+    act(() => {
+      fireEvent.click(continueButton);
+      fireEvent.click(continueButton);
+    });
+
+    expect(apiMocks.resumeLeech).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", {name: "Возвращаем карточку…"})).toBeDisabled();
+    expect(screen.queryByRole("button", {name: "Исправить карточку"})).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", {name: "Оставить на потом"})).not.toBeInTheDocument();
+
+    await act(async () => resolveResume({ok: true}));
+    expect(await screen.findByText("В этой колоде пока всё")).toBeInTheDocument();
+  });
+
+  it("keeps rescue open and retries only guarded leave when it fails", async () => {
+    apiMocks.fetchDecks.mockResolvedValue([{id: 1, name: "Spanish", new_count: 1, learning_count: 0, review_count: 0}]);
+    apiMocks.fetchNextCard
+      .mockResolvedValueOnce(studyCard())
+      .mockResolvedValueOnce(studyDone());
+    apiMocks.submitAnswer.mockResolvedValue(answerResult({review_lapses: 4, auto_suspended: true}));
+    apiMocks.deferLeech
+      .mockRejectedValueOnce(new Error("network"))
+      .mockResolvedValueOnce({ok: true});
+    render(<App />);
+
+    fireEvent.click(await screen.findByText("Spanish"));
+    fireEvent.click(await screen.findByText("Показать ответ"));
+    fireEvent.click(await screen.findByRole("button", {name: /Снова/}));
+    fireEvent.click(await screen.findByRole("button", {name: "Оставить на потом"}));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Не удалось оставить карточку на потом");
+    expect(screen.getByRole("heading", {name: "Карточка забыта 4 раза"})).toBeInTheDocument();
+    expect(apiMocks.deferLeech).toHaveBeenCalledWith(7, 4);
+    expect(apiMocks.fetchNextCard).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", {name: "Продолжить учить"})).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", {name: "Исправить карточку"})).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", {name: "Повторить: оставить на потом"}));
+    expect(await screen.findByText("В этой колоде пока всё")).toBeInTheDocument();
+    expect(apiMocks.deferLeech).toHaveBeenCalledTimes(2);
+    expect(apiMocks.resumeLeech).not.toHaveBeenCalled();
+    expect(apiMocks.submitAnswer).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps rescue open when next-card fails after guarded leave", async () => {
+    apiMocks.fetchDecks.mockResolvedValue([{id: 1, name: "Spanish", new_count: 1, learning_count: 0, review_count: 0}]);
+    apiMocks.fetchNextCard
+      .mockResolvedValueOnce(studyCard())
+      .mockRejectedValueOnce(new Error("network"))
+      .mockResolvedValueOnce(studyDone());
+    apiMocks.submitAnswer.mockResolvedValue(answerResult({review_lapses: 4, auto_suspended: true}));
+    render(<App />);
+
+    fireEvent.click(await screen.findByText("Spanish"));
+    fireEvent.click(await screen.findByText("Показать ответ"));
+    fireEvent.click(await screen.findByRole("button", {name: /Снова/}));
+    fireEvent.click(await screen.findByRole("button", {name: "Оставить на потом"}));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Попробуйте ещё раз");
+    expect(screen.getByRole("heading", {name: "Карточка забыта 4 раза"})).toBeInTheDocument();
+    expect(apiMocks.deferLeech).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", {name: "Оставить на потом"})).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", {name: "Исправить карточку"})).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", {name: "Повторить продолжение"}));
+    expect(await screen.findByText("В этой колоде пока всё")).toBeInTheDocument();
+    expect(apiMocks.deferLeech).toHaveBeenCalledTimes(1);
+    expect(apiMocks.submitAnswer).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries only next-card after guarded resume has committed", async () => {
+    apiMocks.fetchDecks.mockResolvedValue([{id: 1, name: "Spanish", new_count: 1, learning_count: 0, review_count: 0}]);
+    apiMocks.fetchNextCard
+      .mockResolvedValueOnce(studyCard())
+      .mockRejectedValueOnce(new Error("network"))
+      .mockResolvedValueOnce(studyDone());
+    apiMocks.submitAnswer.mockResolvedValue(answerResult({review_lapses: 6, auto_suspended: true}));
+    render(<App />);
+
+    fireEvent.click(await screen.findByText("Spanish"));
+    fireEvent.click(await screen.findByText("Показать ответ"));
+    fireEvent.click(await screen.findByRole("button", {name: /Снова/}));
+    fireEvent.click(await screen.findByRole("button", {name: "Продолжить учить"}));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Не удалось загрузить следующую карточку");
+    expect(apiMocks.resumeLeech).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", {name: "Оставить на потом"})).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", {name: "Исправить карточку"})).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", {name: "Повторить продолжение"}));
+
+    expect(await screen.findByText("В этой колоде пока всё")).toBeInTheDocument();
+    expect(apiMocks.resumeLeech).toHaveBeenCalledTimes(1);
+    expect(apiMocks.fetchNextCard).toHaveBeenCalledTimes(3);
+    expect(apiMocks.submitAnswer).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens the leech editor and returns to the same study scope", async () => {
+    apiMocks.fetchDecks.mockResolvedValue([{id: 1, name: "Spanish", new_count: 1, learning_count: 0, review_count: 0}]);
+    apiMocks.fetchNextCard
+      .mockResolvedValueOnce(studyCard())
+      .mockResolvedValueOnce(studyDone());
+    apiMocks.submitAnswer.mockResolvedValue(answerResult({review_lapses: 4, auto_suspended: true}));
+    render(<App />);
+
+    fireEvent.click(await screen.findByText("Spanish"));
+    fireEvent.click(await screen.findByText("Показать ответ"));
+    fireEvent.click(await screen.findByRole("button", {name: /Снова/}));
+    fireEvent.click(await screen.findByRole("button", {name: "Исправить карточку"}));
+
+    await waitFor(() => expect(apiMocks.fetchCard).toHaveBeenCalledWith(7));
+    expect(await screen.findByText("Карточка часто забывается")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", {name: "К списку карточек"}));
+
+    expect(await screen.findByText("В этой колоде пока всё")).toBeInTheDocument();
+    expect(apiMocks.fetchNextCard).toHaveBeenNthCalledWith(2, 1);
+    expect(apiMocks.deferLeech).not.toHaveBeenCalled();
+    expect(apiMocks.resumeLeech).not.toHaveBeenCalled();
   });
 
   it("stops retrying a definitive answer conflict and lets the user leave", async () => {

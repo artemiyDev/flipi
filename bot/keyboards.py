@@ -145,6 +145,25 @@ def rate_card(card_id: int) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
+def leech_rescue(
+    card_id: int,
+    note_id: int,
+    review_lapses: int,
+) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Исправить карточку", callback_data=f"note:edit:{note_id}:{card_id}")
+    builder.button(
+        text="Продолжить учить",
+        callback_data=f"leech:resume:{card_id}:{review_lapses}",
+    )
+    builder.button(
+        text="Оставить на потом",
+        callback_data=f"leech:later:{card_id}:{review_lapses}",
+    )
+    builder.adjust(1)
+    return builder.as_markup()
+
+
 def yes_no(yes_data: str, no_data: str) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="Да", callback_data=yes_data)
@@ -225,9 +244,10 @@ def browse_quick_filters() -> InlineKeyboardMarkup:
     builder.button(text="К повторению", callback_data="browse:filter:is:due")
     builder.button(text="Новые", callback_data="browse:filter:state:new")
     builder.button(text="Приостановлены", callback_data="browse:filter:is:suspended")
+    builder.button(text="Трудные", callback_data="browse:filter:is:leech")
     builder.button(text="С флагом", callback_data="browse:filter:has:flag")
     builder.button(text="В меню", callback_data="menu:main")
-    builder.adjust(2, 2, 1)
+    builder.adjust(2, 2, 1, 1)
     return builder.as_markup()
 
 

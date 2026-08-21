@@ -13,9 +13,10 @@ def test_parse_browser_query_filters() -> None:
 
 
 def test_parse_browser_query_state_and_flags_are_normalized() -> None:
-    query = parse_browser_query("state:Review flag:Red is:suspended is:buried")
+    query = parse_browser_query("state:Review flag:Red is:suspended is:buried is:leech")
 
     assert query.states == ["review"]
     assert query.flags == ["red"]
     assert query.is_suspended is True
     assert query.is_buried is True
+    assert query.is_leech is True

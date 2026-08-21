@@ -7,6 +7,7 @@ from aiogram.types import CallbackQuery, Message
 from bot.db import async_session
 from bot.keyboards import back_to_menu, browse_quick_filters, browse_results
 from bot.services.cards import card_answer, card_question, search_cards
+from bot.services.leeches import is_leech
 from bot.services.users import get_or_create_user
 from bot.states import BrowseCards
 
@@ -20,7 +21,8 @@ async def browse_start(callback: CallbackQuery, state: FSMContext) -> None:
         return
     await state.set_state(BrowseCards.query)
     await callback.message.answer(
-        "Введите текст или фильтр: tag:word, state:new, is:due, is:suspended, is:buried, flag:red, deck:name.",
+        "Введите текст или фильтр: tag:word, state:new, is:due, is:suspended, "
+        "is:buried, is:leech, flag:red, deck:name.",
         reply_markup=browse_quick_filters(),
     )
 
@@ -67,6 +69,8 @@ async def _send_search_results(message: Message, tg_user, query: str) -> None:
             flags.append("buried")
         if card.flag:
             flags.append(f"flag:{card.flag}")
+        if is_leech(card):
+            flags.append(f"leech:{card.review_lapses}")
         status = f" ({', '.join(flags)})" if flags else ""
         lines.append(
             f"\n<b>#{card.id}</b> {escape(card.deck.name)} | {escape(card.state)}{escape(status)}\n"

@@ -65,6 +65,13 @@ from bot.services.decks import (
 )
 from bot.services.events import track
 from bot.services.goals import daily_goal_progress
+from bot.services.leeches import (
+    LEECH_THRESHOLD,
+    LeechResumeConflictError,
+    defer_leech,
+    is_leech,
+    resume_leech,
+)
 from bot.services.optimizer import (
     InsufficientHistoryError,
     MINIMUM_REVIEW_COUNT,
@@ -84,6 +91,7 @@ from bot.services.scheduler import preview_intervals
 from bot.services.stats import forecast_due_counts, heatmap_review_counts, stats_overview
 from bot.services.study import (
     AnswerRequestConflictError,
+    SuspendedCardAnswerError,
     answer_card_request,
     count_done_today,
     get_next_card_for_user,
@@ -181,6 +189,12 @@ class CardSuspendedRequest(BaseModel):
     value: bool
 
 
+class LeechResumeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_review_lapses: int = Field(ge=LEECH_THRESHOLD)
+
+
 class CardFlagRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -264,6 +278,8 @@ async def card_response(session: AsyncSession, user: User, card) -> dict:
         "state": card.state,
         "due": card.due_at.isoformat(),
         "lapses": card.lapses,
+        "review_lapses": card.review_lapses,
+        "is_leech": is_leech(card),
         "suspended": card.suspended,
         "buried_until": card.buried_until.isoformat() if card.buried_until else None,
         "flag": card.flag,
@@ -448,6 +464,8 @@ async def search_cards_endpoint(
                 "preview": card_question(card)[:200],
                 "state": card.state,
                 "due": card.due_at.isoformat(),
+                "review_lapses": card.review_lapses,
+                "is_leech": is_leech(card),
                 "suspended": card.suspended,
                 "buried": card.buried_until is not None,
                 "flag": card.flag,
@@ -499,6 +517,56 @@ async def suspend_card_endpoint(
     card = await api_card_or_404(session, user, card_id)
     await set_card_suspended(session, card, payload.value)
     return {"ok": True}
+
+
+@router.post("/cards/{card_id}/leech/resume")
+async def resume_leech_endpoint(
+    card_id: int,
+    payload: LeechResumeRequest,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> dict:
+    try:
+        result = await resume_leech(
+            session,
+            user,
+            card_id,
+            payload.expected_review_lapses,
+        )
+    except LeechResumeConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Card not found")
+    return {
+        "ok": True,
+        "review_lapses": result.review_lapses,
+        "replayed": result.replayed,
+    }
+
+
+@router.post("/cards/{card_id}/leech/later")
+async def defer_leech_endpoint(
+    card_id: int,
+    payload: LeechResumeRequest,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> dict:
+    try:
+        result = await defer_leech(
+            session,
+            user,
+            card_id,
+            payload.expected_review_lapses,
+        )
+    except LeechResumeConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Card not found")
+    return {
+        "ok": True,
+        "review_lapses": result.review_lapses,
+        "replayed": result.replayed,
+    }
 
 
 @router.post("/cards/{card_id}/bury")
@@ -912,6 +980,8 @@ async def study_answer(
         )
     except AnswerRequestConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except SuspendedCardAnswerError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     if result is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Card not found")
     due_at = result.due_at
@@ -922,6 +992,14 @@ async def study_answer(
         "state": result.state,
         "due": due_at.isoformat(),
         "replayed": result.replayed,
+        "leech": (
+            {
+                "review_lapses": result.leech_alert_lapses,
+                "auto_suspended": True,
+            }
+            if result.leech_alert_lapses is not None
+            else None
+        ),
     }
 
 

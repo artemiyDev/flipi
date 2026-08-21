@@ -6,7 +6,7 @@ from aiogram.types import BufferedInputFile, CallbackQuery, Message
 
 from bot.db import async_session
 from bot.keyboards import choose_study_deck as choose_study_deck_keyboard
-from bot.keyboards import rate_card, show_answer
+from bot.keyboards import leech_rescue, rate_card, show_answer
 from bot.services.cards import (
     card_answer,
     card_question,
@@ -19,8 +19,14 @@ from bot.services.cards import (
     get_next_review_ahead_card,
 )
 from bot.services.decks import get_deck, list_user_deck_display_choices
+from bot.services.leeches import LeechResumeConflictError, defer_leech, resume_leech
 from bot.services.media import extract_media_references, get_media_files_by_names, strip_media_references
-from bot.services.study import answer_card, get_next_card_for_user
+from bot.services.study import (
+    AnswerRequestConflictError,
+    SuspendedCardAnswerError,
+    answer_card_request,
+    get_next_card_for_user,
+)
 from bot.services.users import get_or_create_user
 from bot.states import FilteredStudy
 
@@ -180,31 +186,150 @@ async def rate_study_card(callback: CallbackQuery, state: FSMContext) -> None:
     _, _, card_id_raw, rating_raw = callback.data.split(":")
     card_id = int(card_id_raw)
     rating = int(rating_raw)
+    request_id = f"tg:{callback.message.chat.id}:{callback.message.message_id}"
 
     async with async_session() as session:
         user = await get_or_create_user(session, callback.from_user)
+        try:
+            result = await answer_card_request(
+                session,
+                user,
+                card_id,
+                rating,
+                request_id=request_id,
+            )
+        except AnswerRequestConflictError:
+            await callback.message.answer("Ответ уже сохранён с другой оценкой.")
+            return
+        except SuspendedCardAnswerError:
+            await callback.message.answer("Карточка уже приостановлена.")
+            return
+        if result is None:
+            await callback.message.answer("Карточка не найдена.")
+            return
         card = await get_card(session, user, card_id)
         if card is None:
             await callback.message.answer("Карточка не найдена.")
             return
-        await answer_card(session, user, card, rating)
+        if result.leech_alert_lapses is not None:
+            await callback.message.answer(
+                _leech_text(result.leech_alert_lapses),
+                reply_markup=leech_rescue(
+                    card.id,
+                    card.note_id,
+                    result.leech_alert_lapses,
+                ),
+            )
+            return
+        if result.replayed:
+            return
 
-        data = await state.get_data()
-        if data.get("study_scope") == "all":
-            next_card = await get_next_card_for_user(session, user)
-        elif data.get("study_scope") == "filter":
-            next_card = await get_next_due_card_by_query(session, user, data.get("filter_query", ""))
-        elif data.get("study_scope") == "review_ahead":
-            next_card = await get_next_review_ahead_card(session, card.deck, user.timezone)
-        elif data.get("study_scope") == "new_without_limit":
-            next_card = await get_next_new_card_without_limit(session, card.deck, user.timezone)
-        else:
-            next_card = await get_next_due_card(session, card.deck, user.timezone)
+        next_card = await _next_card_for_scope(session, user, card, state)
         if next_card is None:
             await callback.message.answer("Готово. На сейчас карточек нет.")
             return
 
         await _send_card_question(callback.message, session, user, next_card)
+
+
+@router.callback_query(F.data.startswith("leech:resume:"))
+async def resume_leech_study(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    if callback.from_user is None or callback.message is None or callback.data is None:
+        return
+    _, _, card_id_raw, review_lapses_raw = callback.data.split(":")
+    card_id = int(card_id_raw)
+    expected_review_lapses = int(review_lapses_raw)
+
+    async with async_session() as session:
+        user = await get_or_create_user(session, callback.from_user)
+        try:
+            result = await resume_leech(
+                session,
+                user,
+                card_id,
+                expected_review_lapses,
+            )
+        except LeechResumeConflictError:
+            await callback.message.answer(
+                "Состояние карточки изменилось. Откройте её и проверьте статус."
+            )
+            return
+        if result is None:
+            await callback.message.answer("Карточка не найдена.")
+            return
+        if result.replayed:
+            return
+
+        card = await get_card(session, user, card_id)
+        if card is None:
+            await callback.message.answer("Карточка не найдена.")
+            return
+        next_card = await _next_card_for_scope(session, user, card, state)
+        if next_card is None:
+            await callback.message.answer("Готово. На сейчас карточек нет.")
+            return
+        await _send_card_question(callback.message, session, user, next_card)
+
+
+@router.callback_query(F.data.startswith("leech:later:"))
+async def leave_leech_for_later(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    if callback.from_user is None or callback.message is None or callback.data is None:
+        return
+    _, _, card_id_raw, review_lapses_raw = callback.data.split(":")
+    card_id = int(card_id_raw)
+    expected_review_lapses = int(review_lapses_raw)
+
+    async with async_session() as session:
+        user = await get_or_create_user(session, callback.from_user)
+        try:
+            result = await defer_leech(
+                session,
+                user,
+                card_id,
+                expected_review_lapses,
+            )
+        except LeechResumeConflictError:
+            await callback.message.answer(
+                "Состояние карточки изменилось. Откройте её и проверьте статус."
+            )
+            return
+        if result is None:
+            await callback.message.answer("Карточка не найдена.")
+            return
+        if result.replayed:
+            return
+        card = await get_card(session, user, card_id)
+        if card is None:
+            await callback.message.answer("Карточка не найдена.")
+            return
+        next_card = await _next_card_for_scope(session, user, card, state)
+        if next_card is None:
+            await callback.message.answer("Готово. На сейчас карточек нет.")
+            return
+        await _send_card_question(callback.message, session, user, next_card)
+
+
+async def _next_card_for_scope(session, user, card, state: FSMContext):
+    data = await state.get_data()
+    if data.get("study_scope") == "all":
+        return await get_next_card_for_user(session, user)
+    if data.get("study_scope") == "filter":
+        return await get_next_due_card_by_query(session, user, data.get("filter_query", ""))
+    if data.get("study_scope") == "review_ahead":
+        return await get_next_review_ahead_card(session, card.deck, user.timezone)
+    if data.get("study_scope") == "new_without_limit":
+        return await get_next_new_card_without_limit(session, card.deck, user.timezone)
+    return await get_next_due_card(session, card.deck, user.timezone)
+
+
+def _leech_text(review_lapses: int) -> str:
+    return (
+        f"<b>Карточка забыта {review_lapses} раза</b>\n\n"
+        "Мы приостановили её, чтобы она не забирала время. "
+        "Упростите вопрос, разбейте материал или добавьте подсказку."
+    )
 
 
 def _question_text(deck_name: str, card) -> str:

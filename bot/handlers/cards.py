@@ -30,6 +30,7 @@ from bot.services.cards import (
 )
 from bot.services.decks import get_deck, list_user_deck_display_choices
 from bot.services.events import track
+from bot.services.leeches import is_leech
 from bot.services.users import get_or_create_user
 from bot.states import AddCard, EditNote, SetDueDate
 
@@ -410,6 +411,8 @@ def _card_details(card) -> str:
         flags.append(f"buried until {card.buried_until.isoformat()}")
     if card.flag:
         flags.append(f"flag: {card.flag}")
+    if is_leech(card):
+        flags.append(f"leech: {card.review_lapses}")
     status = ", ".join(flags) if flags else "активна"
     return (
         f"<b>Карточка #{card.id}</b>\n"

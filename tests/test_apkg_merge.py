@@ -77,6 +77,9 @@ def test_apkg_merge_updates_note_without_changing_card_schedule(session_factory)
             card.due_at = datetime.now(UTC) + timedelta(days=30)
             card.state = "review"
             card.fsrs_data = {"stability": 12.5}
+            card.review_lapses = 4
+            card.suspended = True
+            card.leech_suspended_lapses = 4
             await session.commit()
             await session.refresh(card)
             due_at = card.due_at
@@ -113,6 +116,9 @@ def test_apkg_merge_updates_note_without_changing_card_schedule(session_factory)
             assert card.due_at == due_at
             assert card.state == state
             assert card.fsrs_data == fsrs_data
+            assert card.review_lapses == 4
+            assert card.suspended is True
+            assert card.leech_suspended_lapses == 4
             assert card.template_name == "Updated"
             assert card.question_template == "{{Back}}"
             assert card.answer_template == "{{Front}}"

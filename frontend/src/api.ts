@@ -54,6 +54,19 @@ export interface DailyGoals {
   };
 }
 
+export interface LeechAlert {
+  review_lapses: number;
+  auto_suspended: true;
+}
+
+export interface StudyAnswer {
+  ok: true;
+  state: string;
+  due: string;
+  replayed: boolean;
+  leech: LeechAlert | null;
+}
+
 export interface Media {
   id: number;
   name: string;
@@ -112,6 +125,8 @@ export interface CardSearchItem {
   suspended: boolean;
   buried: boolean;
   flag: CardFlag | null;
+  is_leech: boolean;
+  review_lapses: number;
 }
 
 export interface CardSearchPage {
@@ -137,6 +152,8 @@ export interface CardDetail {
   state: string;
   due: string;
   lapses: number;
+  review_lapses: number;
+  is_leech: boolean;
   suspended: boolean;
   buried_until: string | null;
   flag: CardFlag | null;
@@ -252,6 +269,20 @@ export function setCardSuspended(id: number, value: boolean): Promise<{ok: true}
   return request(`/cards/${id}/suspend`, {method: "POST", body: JSON.stringify({value})});
 }
 
+export function resumeLeech(id: number, expectedReviewLapses: number): Promise<{ok: true}> {
+  return request(`/cards/${id}/leech/resume`, {
+    method: "POST",
+    body: JSON.stringify({expected_review_lapses: expectedReviewLapses}),
+  });
+}
+
+export function deferLeech(id: number, expectedReviewLapses: number): Promise<{ok: true}> {
+  return request(`/cards/${id}/leech/later`, {
+    method: "POST",
+    body: JSON.stringify({expected_review_lapses: expectedReviewLapses}),
+  });
+}
+
 export function buryCard(id: number): Promise<{ok: true}> {
   return request(`/cards/${id}/bury`, {method: "POST", body: JSON.stringify({})});
 }
@@ -337,7 +368,7 @@ export function submitAnswer(
   rating: 1 | 2 | 3 | 4,
   elapsedMs: number,
   requestId: string,
-): Promise<{ok: true; state: string; due: string; replayed: boolean}> {
+): Promise<StudyAnswer> {
   return request("/study/answer", {
     method: "POST",
     body: JSON.stringify({card_id: cardId, rating, elapsed_ms: elapsedMs, request_id: requestId}),
