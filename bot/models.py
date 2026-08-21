@@ -211,6 +211,16 @@ class Card(Base):
 
 class ReviewLog(Base):
     __tablename__ = "review_logs"
+    __table_args__ = (
+        Index(
+            "uq_review_logs_user_request_id",
+            "user_id",
+            "request_id",
+            unique=True,
+            postgresql_where=text("request_id IS NOT NULL"),
+            sqlite_where=text("request_id IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
@@ -222,6 +232,8 @@ class ReviewLog(Base):
     previous_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     next_due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     fsrs_review_log: Mapped[dict | None] = mapped_column(JSONB)
+    request_id: Mapped[str | None] = mapped_column(String(64))
+    state_after: Mapped[str | None] = mapped_column(String(32))
 
     card: Mapped[Card] = relationship(back_populates="reviews")
 

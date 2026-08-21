@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import UTC, date
 from pathlib import Path
 import sqlite3
 from typing import Annotated, Literal
@@ -82,7 +82,8 @@ from bot.services.importers import decode_text_payload, parse_text_cards
 from bot.services.scheduler import preview_intervals
 from bot.services.stats import forecast_due_counts, heatmap_review_counts, stats_overview
 from bot.services.study import (
-    answer_card,
+    AnswerRequestConflictError,
+    answer_card_request,
     count_done_today,
     get_next_card_for_user,
     sanitize_card_css,
@@ -97,6 +98,12 @@ class StudyAnswerRequest(BaseModel):
     card_id: int
     rating: int = Field(ge=1, le=4)
     elapsed_ms: int | None = None
+    request_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=64,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+    )
 
 
 class DeckCreateRequest(BaseModel):
@@ -886,11 +893,28 @@ async def study_answer(
     session: Annotated[AsyncSession, Depends(get_db_session)],
     user: Annotated[User, Depends(get_current_user)],
 ) -> dict:
-    card = await get_card(session, user, payload.card_id)
-    if card is None:
+    try:
+        result = await answer_card_request(
+            session,
+            user,
+            payload.card_id,
+            payload.rating,
+            payload.elapsed_ms,
+            payload.request_id,
+        )
+    except AnswerRequestConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    if result is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Card not found")
-    await answer_card(session, user, card, payload.rating, payload.elapsed_ms)
-    return {"ok": True, "state": card.state, "due": card.due_at.isoformat()}
+    due_at = result.due_at
+    if due_at.tzinfo is None:
+        due_at = due_at.replace(tzinfo=UTC)
+    return {
+        "ok": True,
+        "state": result.state,
+        "due": due_at.isoformat(),
+        "replayed": result.replayed,
+    }
 
 
 @router.get("/media/{media_id}")
