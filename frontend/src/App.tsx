@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useState} from "react";
+import {useCallback, useEffect, useRef, useState} from "react";
 
 import {
   ApiError,
@@ -20,6 +20,12 @@ import {Help} from "./Help";
 import {ShareInstallScreen} from "./Share";
 
 type Tab = "study" | "decks" | "stats";
+type AnswerAttempt = {
+  cardId: number;
+  rating: 1 | 2 | 3 | 4;
+  elapsedMs: number;
+  requestId: string;
+};
 
 function ProgressCounts({progress}: {progress: Progress}): JSX.Element {
   return <span className="counts">
@@ -76,16 +82,38 @@ function Session({deckId, onClose, onUnauthorized}: {deckId: number | "all"; onC
   const [showAnswer, setShowAnswer] = useState(false);
   const [startedAt, setStartedAt] = useState(0);
   const [error, setError] = useState<Error | null>(null);
+  const [answerError, setAnswerError] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [answerAttempt, setAnswerAttempt] = useState<AnswerAttempt | null>(null);
+  const isSubmittingRef = useRef(false);
+  const answerAttemptRef = useRef<AnswerAttempt | null>(null);
 
   const loadNext = () => {
-    setShowAnswer(false);
-    setNext(null);
+    const followsSubmittedAnswer = answerAttemptRef.current !== null;
+    setAnswerError(false);
+    if (!followsSubmittedAnswer) {
+      setShowAnswer(false);
+      setNext(null);
+    }
     fetchNextCard(deckId).then((card) => {
+      isSubmittingRef.current = false;
+      answerAttemptRef.current = null;
+      setIsSubmitting(false);
+      setAnswerAttempt(null);
+      setShowAnswer(false);
       setNext(card);
       if (card.card_id !== null) {
         setStartedAt(Date.now());
       }
-    }).catch(setError);
+    }).catch((cause: Error) => {
+      isSubmittingRef.current = false;
+      setIsSubmitting(false);
+      if (followsSubmittedAnswer && !(cause instanceof ApiError && cause.status === 401)) {
+        setAnswerError(true);
+        return;
+      }
+      setError(cause);
+    });
   };
 
   useEffect(loadNext, [deckId]);
@@ -100,7 +128,11 @@ function Session({deckId, onClose, onUnauthorized}: {deckId: number | "all"; onC
     return <></>;
   }
   if (error) {
-    return <p className="hint centered">Не удалось загрузить сессию.</p>;
+    const answerWasRejected = error instanceof ApiError && [404, 409, 422].includes(error.status);
+    return <section className="done">
+      <p className="hint centered">{answerWasRejected ? "Ответ отклонён. Начните сессию заново." : "Не удалось загрузить сессию."}</p>
+      <button className="primary" onClick={onClose}>К колодам</button>
+    </section>;
   }
   if (next === null) {
     return <p className="hint centered">Загрузка…</p>;
@@ -110,20 +142,64 @@ function Session({deckId, onClose, onUnauthorized}: {deckId: number | "all"; onC
   }
 
   const card = next as StudyCard;
-  const answer = (rating: 1 | 2 | 3 | 4) => {
-    submitAnswer(card.card_id, rating, Math.max(0, Date.now() - startedAt))
+  const submitAttempt = (attempt: AnswerAttempt) => {
+    if (isSubmittingRef.current) {
+      return;
+    }
+    isSubmittingRef.current = true;
+    setIsSubmitting(true);
+    submitAnswer(attempt.cardId, attempt.rating, attempt.elapsedMs, attempt.requestId)
       .then(loadNext)
-      .catch(setError);
+      .catch((cause: unknown) => {
+        isSubmittingRef.current = false;
+        setIsSubmitting(false);
+        if (cause instanceof ApiError && cause.status === 401) {
+          answerAttemptRef.current = null;
+          setAnswerAttempt(null);
+          setError(cause);
+          return;
+        }
+        if (cause instanceof ApiError && [404, 409, 422].includes(cause.status)) {
+          answerAttemptRef.current = null;
+          setAnswerAttempt(null);
+          setError(cause);
+          return;
+        }
+        setAnswerError(true);
+      });
+  };
+  const answer = (rating: 1 | 2 | 3 | 4) => {
+    if (isSubmittingRef.current || answerAttemptRef.current !== null) {
+      return;
+    }
+    const attempt = {
+      cardId: card.card_id,
+      rating,
+      elapsedMs: Math.max(0, Date.now() - startedAt),
+      requestId: crypto.randomUUID(),
+    };
+    answerAttemptRef.current = attempt;
+    setAnswerAttempt(attempt);
+    setAnswerError(false);
+    submitAttempt(attempt);
+  };
+  const retryAnswer = () => {
+    if (answerAttemptRef.current !== null) {
+      submitAttempt(answerAttemptRef.current);
+    }
   };
   const ratings: Array<[1 | 2 | 3 | 4, keyof StudyCard["intervals"], string]> = [
     [1, "again", "Снова"], [2, "hard", "Трудно"], [3, "good", "Хорошо"], [4, "easy", "Легко"],
   ];
 
   return <section className="session">
-    <header className="session-header"><button className="close" aria-label="К колодам" onClick={onClose}>×</button><span>{card.deck_name}</span><ProgressCounts progress={card.progress} /></header>
+    <header className="session-header"><button className="close" aria-label="К колодам" disabled={answerAttempt !== null} onClick={onClose}>×</button><span>{card.deck_name}</span><ProgressCounts progress={card.progress} /></header>
     <CardBody questionHtml={card.question_html} answerHtml={showAnswer ? card.answer_html : undefined} cardCss={card.card_css} media={card.media} />
     {!showAnswer ? <button className="primary wide" onClick={() => setShowAnswer(true)}>Показать ответ</button> :
-      <div className="ratings">{ratings.map(([rating, interval, label]) => <button key={rating} onClick={() => answer(rating)}>{label}<small>{card.intervals[interval]}</small></button>)}</div>}
+      <>
+        {answerError && <section className="hint centered" role="alert"><p>Не удалось подтвердить ответ.</p><button className="primary" disabled={isSubmitting} onClick={retryAnswer}>Повторить отправку</button></section>}
+        <div className="ratings">{ratings.map(([rating, interval, label]) => <button disabled={isSubmitting || answerAttempt !== null} key={rating} onClick={() => answer(rating)}>{label}<small>{card.intervals[interval]}</small></button>)}</div>
+      </>}
   </section>;
 }
 

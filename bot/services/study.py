@@ -1,9 +1,12 @@
 import re
+from dataclasses import dataclass
 from datetime import datetime
 
 import nh3
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from bot.models import Card, ReviewLog, User
 from bot.services.cards import (
@@ -45,6 +48,17 @@ HTML_TAGS = {
 MAX_CARD_CSS_BYTES = 64 * 1024
 IMPORT_CSS_RE = re.compile(r"@import\s+[^;]+;", flags=re.IGNORECASE)
 CSS_URL_RE = re.compile(r"url\(\s*(.*?)\s*\)", flags=re.IGNORECASE | re.DOTALL)
+
+
+class AnswerRequestConflictError(ValueError):
+    pass
+
+
+@dataclass(frozen=True)
+class StudyAnswerResult:
+    state: str
+    due_at: datetime
+    replayed: bool
 
 
 def sanitize_card_html(value: str) -> str:
@@ -95,15 +109,108 @@ async def answer_card(
     rating: int,
     elapsed_ms: int | None = None,
 ) -> Card:
-    previous_state = card.state
-    review = review_with_fsrs(card, card.deck, rating, elapsed_ms)
-    session.add(review)
-    if card.deck.bury_siblings:
-        await bury_sibling_cards(session, card, user.timezone)
-    await increment_daily_counter(session, card, previous_state, user.timezone)
-    await track(session, user.id, "review_answer", rating=rating, state_after=card.state)
+    await _record_answer(session, user, card, rating, elapsed_ms)
     await session.commit()
     return card
+
+
+async def answer_card_request(
+    session: AsyncSession,
+    user: User,
+    card_id: int,
+    rating: int,
+    elapsed_ms: int | None = None,
+    request_id: str | None = None,
+) -> StudyAnswerResult | None:
+    user_id = user.id
+    timezone_name = user.timezone
+
+    result = await session.execute(
+        select(Card)
+        .where(Card.id == card_id, Card.user_id == user_id)
+        .options(selectinload(Card.deck))
+        .with_for_update()
+    )
+    card = result.scalar_one_or_none()
+    if card is None:
+        return None
+
+    if request_id is not None:
+        existing = await _get_review_by_request_id(session, user_id, request_id)
+        if existing is not None:
+            return _replay_review(existing, card_id, rating)
+
+    try:
+        await _record_answer(
+            session,
+            user,
+            card,
+            rating,
+            elapsed_ms,
+            request_id=request_id,
+            timezone_name=timezone_name,
+        )
+        await session.commit()
+    except IntegrityError as exc:
+        await session.rollback()
+        if request_id is None:
+            raise
+        existing = await _get_review_by_request_id(session, user_id, request_id)
+        if existing is None:
+            raise
+        try:
+            return _replay_review(existing, card_id, rating)
+        except AnswerRequestConflictError as conflict:
+            raise conflict from exc
+
+    return StudyAnswerResult(state=card.state, due_at=card.due_at, replayed=False)
+
+
+async def _record_answer(
+    session: AsyncSession,
+    user: User,
+    card: Card,
+    rating: int,
+    elapsed_ms: int | None,
+    *,
+    request_id: str | None = None,
+    timezone_name: str | None = None,
+) -> None:
+    previous_state = card.state
+    review = review_with_fsrs(card, card.deck, rating, elapsed_ms)
+    review.request_id = request_id
+    review.state_after = card.state
+    session.add(review)
+    if card.deck.bury_siblings:
+        await bury_sibling_cards(session, card, timezone_name or user.timezone)
+    await increment_daily_counter(session, card, previous_state, timezone_name or user.timezone)
+    await track(session, user.id, "review_answer", rating=rating, state_after=card.state)
+
+
+async def _get_review_by_request_id(
+    session: AsyncSession,
+    user_id: int,
+    request_id: str,
+) -> ReviewLog | None:
+    result = await session.execute(
+        select(ReviewLog).where(
+            ReviewLog.user_id == user_id,
+            ReviewLog.request_id == request_id,
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+def _replay_review(review: ReviewLog, card_id: int, rating: int) -> StudyAnswerResult:
+    if review.card_id != card_id or review.rating != rating:
+        raise AnswerRequestConflictError("Request ID was already used for another answer")
+    if review.state_after is None:
+        raise RuntimeError("Idempotent review is missing its saved state")
+    return StudyAnswerResult(
+        state=review.state_after,
+        due_at=review.next_due_at,
+        replayed=True,
+    )
 
 
 async def count_done_today(

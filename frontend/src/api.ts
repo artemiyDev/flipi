@@ -322,10 +322,11 @@ export function submitAnswer(
   cardId: number,
   rating: 1 | 2 | 3 | 4,
   elapsedMs: number,
-): Promise<{ok: true; state: string; due: string}> {
+  requestId: string,
+): Promise<{ok: true; state: string; due: string; replayed: boolean}> {
   return request("/study/answer", {
     method: "POST",
-    body: JSON.stringify({card_id: cardId, rating, elapsed_ms: elapsedMs}),
+    body: JSON.stringify({card_id: cardId, rating, elapsed_ms: elapsedMs, request_id: requestId}),
   });
 }
 
