@@ -33,6 +33,7 @@ const card = {
   card_css: null,
   media: [],
   fields: {}, front: "Hola", back: "Привет", tags: ["basic"], state: "new", due: "2026-08-15T00:00:00Z", lapses: 0,
+  review_lapses: 0, is_leech: false,
   suspended: false, buried_until: null, flag: null,
 };
 
@@ -42,7 +43,7 @@ describe("card screens", () => {
     vi.clearAllMocks();
     apiMocks.fetchDecks.mockResolvedValue([{id: 3, name: "Spanish", new_count: 0, learning_count: 0, review_count: 0}]);
     apiMocks.searchCards.mockResolvedValue({total: 2, items: [
-      {card_id: 11, note_id: 8, deck_id: 3, deck_name: "Spanish", preview: "Hola", state: "new", due: "2026-08-15", suspended: false, buried: false, flag: "red"},
+      {card_id: 11, note_id: 8, deck_id: 3, deck_name: "Spanish", preview: "Hola", state: "new", due: "2026-08-15", suspended: false, buried: false, flag: "red", is_leech: true, review_lapses: 4},
     ]});
     apiMocks.fetchCard.mockResolvedValue(card);
     apiMocks.createCard.mockResolvedValue({note_id: 8});
@@ -84,6 +85,25 @@ describe("card screens", () => {
     vi.useRealTimers();
     await waitFor(() => expect(apiMocks.searchCards).toHaveBeenCalledWith("tag:basic", 25, 0));
     expect(screen.getByText("red")).toHaveClass("flag-red");
+    expect(screen.getByText("трудная · 4")).toHaveClass("card-leech");
+
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole("button", {name: "Трудные"}));
+    expect(screen.getByRole("button", {name: "Трудные"})).toHaveAttribute("aria-pressed", "true");
+    await vi.advanceTimersByTimeAsync(300);
+    vi.useRealTimers();
+    await waitFor(() => expect(apiMocks.searchCards).toHaveBeenCalledWith("tag:basic is:leech", 25, 0));
+
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole("button", {name: "Трудные"}));
+    expect(screen.getByRole("button", {name: "Трудные"})).toHaveAttribute("aria-pressed", "false");
+    await vi.advanceTimersByTimeAsync(300);
+    vi.useRealTimers();
+    await waitFor(() => expect(apiMocks.searchCards).toHaveBeenCalledWith("tag:basic", 25, 0));
+
+    apiMocks.searchCards.mockResolvedValueOnce({total: 2, items: [
+      {card_id: 12, note_id: 9, deck_id: 3, deck_name: "Spanish", preview: "Adiós", state: "review", due: "2026-08-16", suspended: false, buried: false, flag: null, is_leech: false, review_lapses: 0},
+    ]});
     fireEvent.click(screen.getByText("Показать ещё"));
     await waitFor(() => expect(apiMocks.searchCards).toHaveBeenCalledWith("tag:basic", 25, 1));
   });
@@ -117,5 +137,26 @@ describe("card screens", () => {
     apiMocks.fetchDecks.mockRejectedValueOnce(new ApiError(401));
     render(<CardCreateScreen deckId={3} onClose={vi.fn()} onUnauthorized={onUnauthorized} />);
     await waitFor(() => expect(onUnauthorized).toHaveBeenCalledOnce());
+  });
+
+  it("shows leech guidance and keeps the existing resume action", async () => {
+    apiMocks.fetchCard.mockResolvedValue({...card, review_lapses: 6, is_leech: true, suspended: true});
+    render(<CardScreen cardId={11} onBack={vi.fn()} onDeleted={vi.fn()} onUnauthorized={vi.fn()} />);
+
+    expect(await screen.findByText("Карточка часто забывается")).toBeInTheDocument();
+    expect(screen.getByText("трудная · 6")).toHaveClass("card-leech");
+    expect(screen.getByText(/Ошибок после изучения: 6/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", {name: "Вернуть"}));
+    await waitFor(() => expect(apiMocks.setCardSuspended).toHaveBeenCalledWith(11, false));
+  });
+
+  it("lets the rescue editor return after a load error", async () => {
+    const onBack = vi.fn();
+    apiMocks.fetchCard.mockRejectedValueOnce(new Error("network"));
+    render(<CardScreen cardId={11} onBack={onBack} onDeleted={vi.fn()} onUnauthorized={vi.fn()} />);
+
+    expect(await screen.findByText("Не удалось загрузить карточку.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", {name: "К списку карточек"}));
+    expect(onBack).toHaveBeenCalledOnce();
   });
 });

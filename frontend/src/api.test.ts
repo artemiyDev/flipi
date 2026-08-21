@@ -1,6 +1,6 @@
 import {beforeEach, describe, expect, it, vi} from "vitest";
 
-import {fetchDecks, fetchMedia, fetchNextCard, fetchSharedDeck, installSharedDeck, shareDeck, submitAnswer} from "./api";
+import {deferLeech, fetchDecks, fetchMedia, fetchNextCard, fetchSharedDeck, installSharedDeck, resumeLeech, shareDeck, submitAnswer} from "./api";
 
 describe("API client", () => {
   beforeEach(() => {
@@ -16,6 +16,8 @@ describe("API client", () => {
     await fetchDecks();
     await fetchNextCard("all");
     await submitAnswer(7, 3, 1200, "7ac1a9ba-8571-4287-a600-8f535fad1e08");
+    await resumeLeech(7, 4);
+    await deferLeech(7, 4);
     await fetchMedia(4);
     await shareDeck(7);
     await fetchSharedDeck("token");
@@ -36,5 +38,23 @@ describe("API client", () => {
       elapsed_ms: 1200,
       request_id: "7ac1a9ba-8571-4287-a600-8f535fad1e08",
     });
+  });
+
+  it("sends the guarded leech counter when resuming a card", async () => {
+    await resumeLeech(7, 6);
+
+    const [url, options] = vi.mocked(fetch).mock.calls[0];
+    expect(url).toBe("/api/cards/7/leech/resume");
+    expect(options?.method).toBe("POST");
+    expect(JSON.parse(String(options?.body))).toEqual({expected_review_lapses: 6});
+  });
+
+  it("sends the guarded leech counter when leaving a card suspended", async () => {
+    await deferLeech(7, 8);
+
+    const [url, options] = vi.mocked(fetch).mock.calls[0];
+    expect(url).toBe("/api/cards/7/leech/later");
+    expect(options?.method).toBe("POST");
+    expect(JSON.parse(String(options?.body))).toEqual({expected_review_lapses: 8});
   });
 });

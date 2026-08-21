@@ -23,6 +23,7 @@ import {CardBody} from "./CardBody";
 const PAGE_SIZE = 25;
 const FLAGS: CardFlag[] = ["red", "orange", "green", "blue", "purple"];
 const CLOZE_RE = /{{c([1-9]\d*)::(.+?)(?:::(.*?))?}}/gs;
+const LEECH_FILTER_RE = /(^|\s)is:leech(?=\s|$)/i;
 
 function isUnauthorized(error: unknown): boolean {
   return error instanceof ApiError && error.status === 401;
@@ -51,6 +52,13 @@ function nextClozeNumber(text: string): number {
     number += 1;
   }
   return number;
+}
+
+function toggleLeechFilter(query: string): string {
+  if (LEECH_FILTER_RE.test(query)) {
+    return query.replace(LEECH_FILTER_RE, "$1").replace(/\s+/g, " ").trim();
+  }
+  return `${query.trim()}${query.trim() ? " " : ""}is:leech`;
 }
 
 export function CardCreateScreen({deckId, onClose, onUnauthorized}: {
@@ -149,7 +157,7 @@ export function CardCreateScreen({deckId, onClose, onUnauthorized}: {
 }
 
 function CardBadges({card}: {card: CardSearchItem}): JSX.Element {
-  return <span className="card-badges"><span className={`card-state state-${card.state}`}>{card.state}</span>{card.suspended && <span className="card-badge">приостановлена</span>}{card.buried && <span className="card-badge">отложена</span>}{card.flag && <span className={`card-flag flag-${card.flag}`}>{card.flag}</span>}</span>;
+  return <span className="card-badges"><span className={`card-state state-${card.state}`}>{card.state}</span>{card.is_leech && <span className="card-badge card-leech">трудная · {card.review_lapses}</span>}{card.suspended && <span className="card-badge">приостановлена</span>}{card.buried && <span className="card-badge">отложена</span>}{card.flag && <span className={`card-flag flag-${card.flag}`}>{card.flag}</span>}</span>;
 }
 
 export function CardsBrowser({initialQuery, onOpenCard, onClose, onUnauthorized}: {
@@ -180,8 +188,11 @@ export function CardsBrowser({initialQuery, onOpenCard, onClose, onUnauthorized}
     return () => window.clearTimeout(timer);
   }, [load]);
 
+  const leechFilterActive = LEECH_FILTER_RE.test(query);
+
   return <section className="cards-screen"><header className="cards-header"><button className="close" aria-label="Назад" onClick={onClose}>×</button><h1>Карточки</h1></header>
-    <input aria-label="Поиск карточек" placeholder="tag:… state:new is:due flag:red deck:… текст" value={query} onChange={(event) => setQuery(event.target.value)} />
+    <input aria-label="Поиск карточек" placeholder="tag:… state:new is:due is:leech flag:red deck:… текст" value={query} onChange={(event) => setQuery(event.target.value)} />
+    <div className="cards-quick-filters"><button aria-pressed={leechFilterActive} className={leechFilterActive ? "active" : ""} onClick={() => setQuery(toggleLeechFilter(query))}>Трудные</button></div>
     {error ? <p className="hint centered">{error.message}</p> : <><p className="hint cards-count">{items.length} из {total}</p><div className="card-list">
       {items.map((card) => <button className="card-row" key={card.card_id} onClick={() => onOpenCard(card.card_id)}><span className="card-preview">{card.preview}</span><small>{card.deck_name}</small><CardBadges card={card} /></button>)}
     </div>{loading && <p className="hint">Загрузка…</p>}{items.length < total && !loading && <button className="wide" onClick={() => load(items.length, true)}>Показать ещё</button>}</>}
@@ -239,13 +250,14 @@ export function CardScreen({cardId, onBack, onDeleted, onUnauthorized}: {
   };
 
   if (error) {
-    return <p className="hint centered">{error.message}</p>;
+    return <section className="cards-screen"><header className="cards-header"><button className="close" aria-label="К списку карточек" onClick={onBack}>×</button><h1>Карточка</h1></header><p className="hint">{error.message}</p><button className="primary" onClick={load}>Повторить</button></section>;
   }
   if (!card) {
     return <p className="hint centered">Загрузка…</p>;
   }
 
-  return <section className="cards-screen"><header className="cards-header"><button className="close" aria-label="К списку карточек" onClick={onBack}>×</button><div><h1>{card.deck_name}</h1><span className="hint">{card.state}</span></div></header>
+  return <section className="cards-screen"><header className="cards-header"><button className="close" aria-label="К списку карточек" onClick={onBack}>×</button><div><h1>{card.deck_name}</h1><div className="card-detail-status"><span className="hint">{card.state}</span>{card.is_leech && <span className="card-badge card-leech">трудная · {card.review_lapses}</span>}</div></div></header>
+    {card.is_leech && <section className="leech-detail-hint"><strong>Карточка часто забывается</strong><p>Ошибок после изучения: {card.review_lapses}. Упростите вопрос, разбейте материал или добавьте подсказку.</p>{card.suspended && <p>Карточка приостановлена. После исправления нажмите «Вернуть».</p>}</section>}
     <section className="card-render"><CardBody questionHtml={card.question_html} answerHtml={card.answer_html} cardCss={card.card_css} media={card.media} /></section>
     <section className="card-form"><label>Лицевая сторона<textarea value={front} onChange={(event) => setFront(event.target.value)} /></label><label>Обратная сторона<textarea value={back} onChange={(event) => setBack(event.target.value)} /></label><label>Теги <span className="hint">(через пробел)</span><input value={tags} onChange={(event) => setTags(event.target.value)} /></label><button className="primary" disabled={saving} onClick={save}>Сохранить</button></section>
     <section className="card-actions"><button onClick={() => action(() => setCardSuspended(card.card_id, !card.suspended), "Не удалось изменить состояние карточки.")}>{card.suspended ? "Вернуть" : "Приостановить"}</button><button onClick={() => action(() => buryCard(card.card_id), "Не удалось отложить карточку.")}>Отложить до завтра</button><label>Задать дату<input aria-label="Дата повторения" type="date" onChange={(event) => event.target.value && action(() => setCardDue(card.card_id, event.target.value), "Не удалось задать дату.")} /></label><div className="flag-actions"><span>Флаг</span>{FLAGS.map((flag) => <button className={`flag-${flag}`} key={flag} onClick={() => action(() => setCardFlag(card.card_id, flag), "Не удалось изменить флаг.")}>{flag}</button>)}{card.flag && <button onClick={() => action(() => setCardFlag(card.card_id, null), "Не удалось изменить флаг.")}>Снять</button>}</div><button onClick={() => { if (window.confirm("Сбросить прогресс карточки?")) action(() => resetCard(card.card_id), "Не удалось сбросить прогресс."); }}>Сбросить прогресс</button><button className="delete-button" onClick={remove}>Удалить заметку</button></section>

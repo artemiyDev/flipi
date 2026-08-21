@@ -38,6 +38,12 @@ nav .active { color: var(--tg-button-color); }
 .ratings { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
 .ratings button { padding: 10px 4px; border-radius: 8px; }
 .ratings small { display: block; margin-top: 4px; color: var(--tg-hint-color); }
+.leech-rescue { display: grid; gap: 12px; min-width: 0; padding: 14px; border: 1px solid #e8a33d; border-radius: 10px; background: var(--tg-secondary-bg-color); overflow-wrap: anywhere; }
+.leech-rescue h2, .leech-rescue p { margin: 0; }
+.leech-rescue h2 { font-size: 18px; }
+.leech-rescue-actions { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; min-width: 0; }
+.leech-rescue-actions button { width: 100%; min-width: 0; padding: 11px 12px; border-radius: 8px; white-space: normal; overflow-wrap: anywhere; }
+.leech-rescue[aria-busy="true"] { opacity: .8; }
 .done { min-height: 80vh; display: grid; place-content: center; gap: 16px; text-align: center; }
 .done-title { margin: 0; font-size: 20px; }
 .done .daily-goals { width: min(100%, 360px); }
@@ -94,17 +100,25 @@ textarea { min-height: 72px; resize: vertical; }
 .deck-actions { display: flex; gap: 8px; margin: 12px 0; }
 .deck-actions button { flex: 1; padding: 10px; border-radius: 8px; }
 .cards-screen { max-width: 640px; margin: 0 auto; }
-.cards-header { display: flex; gap: 10px; align-items: center; margin-bottom: 16px; }
+.cards-header { display: flex; gap: 10px; align-items: center; margin-bottom: 16px; min-width: 0; }
+.cards-header > :last-child { min-width: 0; }
 .cards-header h1 { margin: 0; font-size: 22px; overflow-wrap: anywhere; }
 .card-form { display: grid; gap: 12px; padding: 16px 0; }
 .card-form label, .card-actions label { display: grid; gap: 6px; font-size: 14px; }
 .cards-count { margin: 12px 0 4px; }
+.cards-quick-filters { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; min-width: 0; }
+.cards-quick-filters button { max-width: 100%; padding: 7px 10px; border-radius: 8px; white-space: normal; overflow-wrap: anywhere; }
+.cards-quick-filters .active { color: var(--tg-button-text-color); background: var(--tg-button-color); }
 .card-list { display: grid; }
 .card-row { display: grid; gap: 4px; width: 100%; padding: 14px 0; text-align: left; border-bottom: 1px solid var(--tg-hint-color); }
 .card-row small { color: var(--tg-hint-color); }
 .card-preview { overflow-wrap: anywhere; }
 .card-badges, .flag-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .card-badge, .card-state, .card-flag { padding: 2px 6px; border-radius: 9px; font-size: 11px; background: var(--tg-secondary-bg-color); }
+.card-leech { color: #e8574d; }
+.card-detail-status { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.leech-detail-hint { display: grid; gap: 6px; min-width: 0; margin-bottom: 12px; padding: 12px; border: 1px solid #e8a33d; border-radius: 10px; overflow-wrap: anywhere; }
+.leech-detail-hint p { margin: 0; }
 .state-new { color: #2481cc; }.state-learning, .state-relearning { color: #e8a33d; }.state-review { color: #4caf50; }
 .flag-red { color: #e8574d; }.flag-orange { color: #e8a33d; }.flag-green { color: #4caf50; }.flag-blue { color: #2481cc; }.flag-purple { color: #9b59b6; }
 .card-render { padding: 16px; background: var(--tg-secondary-bg-color); overflow-wrap: anywhere; }

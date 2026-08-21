@@ -16,6 +16,7 @@ from bot.services.cards import (
 )
 from bot.services.decks import list_user_decks
 from bot.services.events import track
+from bot.services.leeches import register_review_lapse
 from bot.services.scheduler import review_with_fsrs
 from bot.services.timezones import user_day_start_utc, user_local_date
 
@@ -54,11 +55,16 @@ class AnswerRequestConflictError(ValueError):
     pass
 
 
+class SuspendedCardAnswerError(ValueError):
+    pass
+
+
 @dataclass(frozen=True)
 class StudyAnswerResult:
     state: str
     due_at: datetime
     replayed: bool
+    leech_alert_lapses: int | None
 
 
 def sanitize_card_html(value: str) -> str:
@@ -109,9 +115,21 @@ async def answer_card(
     rating: int,
     elapsed_ms: int | None = None,
 ) -> Card:
-    await _record_answer(session, user, card, rating, elapsed_ms)
+    result = await session.execute(
+        select(Card)
+        .where(Card.id == card.id, Card.user_id == user.id)
+        .options(selectinload(Card.deck))
+        .execution_options(populate_existing=True)
+        .with_for_update()
+    )
+    locked_card = result.scalar_one_or_none()
+    if locked_card is None:
+        raise LookupError("Card not found")
+    if locked_card.suspended:
+        raise SuspendedCardAnswerError("Card is suspended")
+    await _record_answer(session, user, locked_card, rating, elapsed_ms)
     await session.commit()
-    return card
+    return locked_card
 
 
 async def answer_card_request(
@@ -129,6 +147,7 @@ async def answer_card_request(
         select(Card)
         .where(Card.id == card_id, Card.user_id == user_id)
         .options(selectinload(Card.deck))
+        .execution_options(populate_existing=True)
         .with_for_update()
     )
     card = result.scalar_one_or_none()
@@ -140,8 +159,11 @@ async def answer_card_request(
         if existing is not None:
             return _replay_review(existing, card_id, rating)
 
+    if card.suspended:
+        raise SuspendedCardAnswerError("Card is suspended")
+
     try:
-        await _record_answer(
+        review = await _record_answer(
             session,
             user,
             card,
@@ -163,7 +185,12 @@ async def answer_card_request(
         except AnswerRequestConflictError as conflict:
             raise conflict from exc
 
-    return StudyAnswerResult(state=card.state, due_at=card.due_at, replayed=False)
+    return StudyAnswerResult(
+        state=card.state,
+        due_at=card.due_at,
+        replayed=False,
+        leech_alert_lapses=review.leech_alert_lapses,
+    )
 
 
 async def _record_answer(
@@ -175,16 +202,25 @@ async def _record_answer(
     *,
     request_id: str | None = None,
     timezone_name: str | None = None,
-) -> None:
+) -> ReviewLog:
     previous_state = card.state
     review = review_with_fsrs(card, card.deck, rating, elapsed_ms)
     review.request_id = request_id
     review.state_after = card.state
+    leech_alert_lapses = register_review_lapse(card, review, previous_state, rating)
     session.add(review)
     if card.deck.bury_siblings:
         await bury_sibling_cards(session, card, timezone_name or user.timezone)
     await increment_daily_counter(session, card, previous_state, timezone_name or user.timezone)
     await track(session, user.id, "review_answer", rating=rating, state_after=card.state)
+    if leech_alert_lapses is not None:
+        await track(
+            session,
+            user.id,
+            "leech_detected",
+            review_lapses=leech_alert_lapses,
+        )
+    return review
 
 
 async def _get_review_by_request_id(
@@ -210,6 +246,7 @@ def _replay_review(review: ReviewLog, card_id: int, rating: int) -> StudyAnswerR
         state=review.state_after,
         due_at=review.next_due_at,
         replayed=True,
+        leech_alert_lapses=review.leech_alert_lapses,
     )
 
 

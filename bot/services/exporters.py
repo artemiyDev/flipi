@@ -37,6 +37,7 @@ async def export_deck_csv(session: AsyncSession, deck: Deck) -> bytes:
             "flag",
             "reps",
             "lapses",
+            "review_lapses",
         ]
     )
     for card in cards:
@@ -55,6 +56,7 @@ async def export_deck_csv(session: AsyncSession, deck: Deck) -> bytes:
                 card.flag or "",
                 card.reps,
                 card.lapses,
+                card.review_lapses,
             ]
         )
     return buffer.getvalue().encode("utf-8-sig")
@@ -105,6 +107,7 @@ async def export_user_backup_json(session: AsyncSession, user: User) -> bytes:
                         else None,
                         "next_due_at": review.next_due_at.isoformat(),
                         "fsrs_review_log": review.fsrs_review_log,
+                        "leech_alert_lapses": review.leech_alert_lapses,
                     }
                 )
 
@@ -141,6 +144,8 @@ async def export_user_backup_json(session: AsyncSession, user: User) -> bytes:
                     "flag": card.flag,
                     "reps": card.reps,
                     "lapses": card.lapses,
+                    "review_lapses": card.review_lapses,
+                    "leech_suspended_lapses": card.leech_suspended_lapses,
                     "reviews": review_logs.get(card.id, []),
                 }
             )

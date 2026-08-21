@@ -9,6 +9,7 @@ from sqlalchemy.orm import selectinload
 
 from bot.models import Card, DailyStudyCounter, Deck, Note, User
 from bot.services.scheduler import new_fsrs_card_json
+from bot.services.leeches import LEECH_THRESHOLD
 from bot.services.timezones import user_today
 
 CLOZE_RE = re.compile(r"{{c(\d+)::(.*?)(?:::(.*?))?}}", flags=re.DOTALL)
@@ -27,6 +28,7 @@ class BrowserQuery:
     is_due: bool = False
     is_suspended: bool = False
     is_buried: bool = False
+    is_leech: bool = False
     has_flag: bool = False
 
 
@@ -834,6 +836,8 @@ def _build_card_query_filters(
         filters.append(Card.suspended.is_(True))
     if parsed.is_buried:
         filters.append(Card.buried_until >= today)
+    if parsed.is_leech:
+        filters.append(Card.review_lapses >= LEECH_THRESHOLD)
     if parsed.has_flag:
         filters.append(Card.flag.is_not(None))
 
@@ -859,6 +863,7 @@ def parse_browser_query(query: str) -> BrowserQuery:
     is_due = False
     is_suspended = False
     is_buried = False
+    is_leech = False
     has_flag = False
 
     for token in query.split():
@@ -879,6 +884,8 @@ def parse_browser_query(query: str) -> BrowserQuery:
             is_suspended = True
         elif key == "is" and value == "buried":
             is_buried = True
+        elif key == "is" and value == "leech":
+            is_leech = True
         elif key == "has" and value == "flag":
             has_flag = True
         elif token:
@@ -893,6 +900,7 @@ def parse_browser_query(query: str) -> BrowserQuery:
         is_due=is_due,
         is_suspended=is_suspended,
         is_buried=is_buried,
+        is_leech=is_leech,
         has_flag=has_flag,
     )
 
@@ -956,7 +964,9 @@ async def delete_note(session: AsyncSession, note: Note) -> None:
 
 
 async def set_card_suspended(session: AsyncSession, card: Card, suspended: bool) -> None:
+    card = await _lock_card_for_update(session, card)
     card.suspended = suspended
+    card.leech_suspended_lapses = None
     if suspended:
         card.buried_until = None
     await session.commit()
@@ -989,10 +999,12 @@ async def bury_sibling_cards(
 
 
 async def set_card_due_in_days(session: AsyncSession, card: Card, days: int) -> None:
+    card = await _lock_card_for_update(session, card)
     card.due_at = datetime.now(UTC) + timedelta(days=max(days, 0))
     card.state = "review"
     card.buried_until = None
     card.suspended = False
+    card.leech_suspended_lapses = None
     await session.commit()
 
 
@@ -1002,12 +1014,28 @@ async def set_card_due_date(session: AsyncSession, card: Card, due_date: date) -
 
 
 async def reset_card(session: AsyncSession, card: Card) -> None:
+    card = await _lock_card_for_update(session, card)
     card.due_at = datetime.now(UTC)
     card.state = "new"
     card.fsrs_data = new_fsrs_card_json()
     card.buried_until = None
     card.suspended = False
+    card.review_lapses = 0
+    card.leech_suspended_lapses = None
     await session.commit()
+
+
+async def _lock_card_for_update(session: AsyncSession, card: Card) -> Card:
+    result = await session.execute(
+        select(Card)
+        .where(Card.id == card.id, Card.user_id == card.user_id)
+        .execution_options(populate_existing=True)
+        .with_for_update()
+    )
+    locked_card = result.scalar_one_or_none()
+    if locked_card is None:
+        raise LookupError("Card not found")
+    return locked_card
 
 
 async def set_card_flag(session: AsyncSession, card: Card, flag: str | None) -> None:

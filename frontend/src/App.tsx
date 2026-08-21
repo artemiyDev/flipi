@@ -2,11 +2,14 @@ import {useCallback, useEffect, useRef, useState} from "react";
 
 import {
   ApiError,
+  deferLeech,
   fetchDecks,
   fetchNextCard,
+  resumeLeech,
   submitAnswer,
   type DailyGoals,
   type Deck,
+  type LeechAlert,
   type NextCard,
   type Progress,
   type StudyCard,
@@ -27,6 +30,16 @@ type AnswerAttempt = {
   elapsedMs: number;
   requestId: string;
 };
+type LeechRescue = {
+  cardId: number;
+  alert: LeechAlert;
+};
+type LeechAction = "resume" | "later";
+type LeechPhase =
+  | {kind: "choosing"}
+  | {kind: "conflict"}
+  | {kind: "action"; action: LeechAction}
+  | {kind: "next"; action: LeechAction};
 
 function ProgressCounts({progress}: {progress: Progress}): JSX.Element {
   return <span className="counts">
@@ -88,7 +101,12 @@ function StudyDecks({onStudy, onCreateDeck, onCatalog, onUnauthorized}: {onStudy
   </section>;
 }
 
-function Session({deckId, onClose, onUnauthorized}: {deckId: number | "all"; onClose: () => void; onUnauthorized: () => void}): JSX.Element {
+function Session({deckId, onClose, onEditCard, onUnauthorized}: {
+  deckId: number | "all";
+  onClose: () => void;
+  onEditCard: (cardId: number) => void;
+  onUnauthorized: () => void;
+}): JSX.Element {
   const [next, setNext] = useState<NextCard | null>(null);
   const [showAnswer, setShowAnswer] = useState(false);
   const [startedAt, setStartedAt] = useState(0);
@@ -96,8 +114,31 @@ function Session({deckId, onClose, onUnauthorized}: {deckId: number | "all"; onC
   const [answerError, setAnswerError] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [answerAttempt, setAnswerAttempt] = useState<AnswerAttempt | null>(null);
+  const [leechRescue, setLeechRescue] = useState<LeechRescue | null>(null);
+  const [leechPhase, setLeechPhase] = useState<LeechPhase>({kind: "choosing"});
+  const [leechActionError, setLeechActionError] = useState<string | null>(null);
+  const [leechActionPending, setLeechActionPending] = useState(false);
   const isSubmittingRef = useRef(false);
   const answerAttemptRef = useRef<AnswerAttempt | null>(null);
+  const leechActionPendingRef = useRef(false);
+
+  const applyNext = (card: NextCard) => {
+    isSubmittingRef.current = false;
+    answerAttemptRef.current = null;
+    leechActionPendingRef.current = false;
+    setIsSubmitting(false);
+    setAnswerAttempt(null);
+    setLeechRescue(null);
+    setLeechPhase({kind: "choosing"});
+    setLeechActionError(null);
+    setLeechActionPending(false);
+    setAnswerError(false);
+    setShowAnswer(false);
+    setNext(card);
+    if (card.card_id !== null) {
+      setStartedAt(Date.now());
+    }
+  };
 
   const loadNext = () => {
     const followsSubmittedAnswer = answerAttemptRef.current !== null;
@@ -106,17 +147,7 @@ function Session({deckId, onClose, onUnauthorized}: {deckId: number | "all"; onC
       setShowAnswer(false);
       setNext(null);
     }
-    fetchNextCard(deckId).then((card) => {
-      isSubmittingRef.current = false;
-      answerAttemptRef.current = null;
-      setIsSubmitting(false);
-      setAnswerAttempt(null);
-      setShowAnswer(false);
-      setNext(card);
-      if (card.card_id !== null) {
-        setStartedAt(Date.now());
-      }
-    }).catch((cause: Error) => {
+    fetchNextCard(deckId).then(applyNext).catch((cause: Error) => {
       isSubmittingRef.current = false;
       setIsSubmitting(false);
       if (followsSubmittedAnswer && !(cause instanceof ApiError && cause.status === 401)) {
@@ -160,6 +191,74 @@ function Session({deckId, onClose, onUnauthorized}: {deckId: number | "all"; onC
   }
 
   const card = next as StudyCard;
+  const finishLeechPending = () => {
+    leechActionPendingRef.current = false;
+    setLeechActionPending(false);
+  };
+  const loadNextAfterLeech = (action: LeechAction) => {
+    setLeechPhase({kind: "next", action});
+    setLeechActionError(null);
+    fetchNextCard(deckId)
+      .then(applyNext)
+      .catch((cause: unknown) => {
+        finishLeechPending();
+        if (cause instanceof ApiError && cause.status === 401) {
+          onUnauthorized();
+          return;
+        }
+        setLeechActionError("Не удалось загрузить следующую карточку. Попробуйте ещё раз.");
+      });
+  };
+  const retryNextAfterLeech = () => {
+    if (leechRescue === null || leechPhase.kind !== "next" || leechActionPendingRef.current) {
+      return;
+    }
+    leechActionPendingRef.current = true;
+    setLeechActionPending(true);
+    loadNextAfterLeech(leechPhase.action);
+  };
+  const runLeechAction = (action: LeechAction) => {
+    const rescue = leechRescue;
+    if (
+      rescue === null
+      || leechActionPendingRef.current
+      || leechPhase.kind === "next"
+      || (leechPhase.kind === "action" && leechPhase.action !== action)
+    ) {
+      return;
+    }
+    leechActionPendingRef.current = true;
+    setLeechActionPending(true);
+    setLeechActionError(null);
+    setLeechPhase({kind: "action", action});
+    const rescueRequest = action === "resume"
+      ? resumeLeech(rescue.cardId, rescue.alert.review_lapses)
+      : deferLeech(rescue.cardId, rescue.alert.review_lapses);
+    rescueRequest
+      .then(() => loadNextAfterLeech(action))
+      .catch((cause: unknown) => {
+        finishLeechPending();
+        if (cause instanceof ApiError && cause.status === 401) {
+          onUnauthorized();
+          return;
+        }
+        if (cause instanceof ApiError && cause.status === 409) {
+          setLeechPhase({kind: "conflict"});
+          setLeechActionError("Карточка уже изменилась. Исправьте её или оставьте на потом.");
+          return;
+        }
+        setLeechActionError(action === "resume"
+          ? "Не удалось вернуть карточку. Попробуйте ещё раз."
+          : "Не удалось оставить карточку на потом. Попробуйте ещё раз.");
+      });
+  };
+  const editLeech = () => {
+    if (leechRescue === null || leechActionPendingRef.current) {
+      return;
+    }
+    leechActionPendingRef.current = true;
+    onEditCard(leechRescue.cardId);
+  };
   const submitAttempt = (attempt: AnswerAttempt) => {
     if (isSubmittingRef.current) {
       return;
@@ -167,7 +266,20 @@ function Session({deckId, onClose, onUnauthorized}: {deckId: number | "all"; onC
     isSubmittingRef.current = true;
     setIsSubmitting(true);
     submitAnswer(attempt.cardId, attempt.rating, attempt.elapsedMs, attempt.requestId)
-      .then(loadNext)
+      .then((result) => {
+        if (result.leech !== null) {
+          isSubmittingRef.current = false;
+          answerAttemptRef.current = null;
+          setIsSubmitting(false);
+          setAnswerAttempt(null);
+          setAnswerError(false);
+          setLeechActionError(null);
+          setLeechPhase({kind: "choosing"});
+          setLeechRescue({cardId: attempt.cardId, alert: result.leech});
+          return;
+        }
+        loadNext();
+      })
       .catch((cause: unknown) => {
         isSubmittingRef.current = false;
         setIsSubmitting(false);
@@ -212,13 +324,31 @@ function Session({deckId, onClose, onUnauthorized}: {deckId: number | "all"; onC
 
   return <section className="session">
     <header className="session-header">
-      <button className="close" aria-label="К колодам" disabled={answerAttempt !== null} onClick={onClose}>×</button>
+      <button className="close" aria-label="К колодам" disabled={answerAttempt !== null || leechRescue !== null} onClick={onClose}>×</button>
       <span className="session-deck-name" title={card.deck_name}>{card.deck_name}</span>
       <ProgressCounts progress={card.progress} />
       <GoalStatus goals={card.goals} />
     </header>
     <CardBody questionHtml={card.question_html} answerHtml={showAnswer ? card.answer_html : undefined} cardCss={card.card_css} media={card.media} />
-    {!showAnswer ? <button className="primary wide" onClick={() => setShowAnswer(true)}>Показать ответ</button> :
+    {leechRescue !== null ? <section className="leech-rescue" aria-busy={leechActionPending} aria-labelledby="leech-rescue-title">
+      <h2 id="leech-rescue-title">Карточка забыта {leechRescue.alert.review_lapses} раза</h2>
+      <p>Мы приостановили её, чтобы она не забирала время. Упростите вопрос, разбейте материал или добавьте подсказку.</p>
+      {leechActionError && <p className="field-error" role="alert">{leechActionError}</p>}
+      {leechPhase.kind === "choosing" ? <div className="leech-rescue-actions" role="group" aria-label="Действия с трудной карточкой">
+          <button className="primary" disabled={leechActionPending} onClick={editLeech}>Исправить карточку</button>
+          <button disabled={leechActionPending} onClick={() => runLeechAction("resume")}>Продолжить учить</button>
+          <button disabled={leechActionPending} onClick={() => runLeechAction("later")}>Оставить на потом</button>
+        </div> : leechPhase.kind === "conflict" ? <div className="leech-rescue-actions" role="group" aria-label="Действия с изменившейся карточкой">
+          <button className="primary" disabled={leechActionPending} onClick={editLeech}>Исправить карточку</button>
+          <button disabled={leechActionPending} onClick={() => runLeechAction("later")}>Оставить на потом</button>
+        </div> : leechPhase.kind === "action" ? <div className="leech-rescue-actions">
+          <button className="primary" disabled={leechActionPending} onClick={() => runLeechAction(leechPhase.action)}>{leechActionPending
+            ? (leechPhase.action === "resume" ? "Возвращаем карточку…" : "Оставляем карточку…")
+            : (leechPhase.action === "resume" ? "Повторить: продолжить учить" : "Повторить: оставить на потом")}</button>
+        </div> : <div className="leech-rescue-actions">
+          <button className="primary" disabled={leechActionPending} onClick={retryNextAfterLeech}>{leechActionPending ? "Загружаем…" : "Повторить продолжение"}</button>
+        </div>}
+    </section> : !showAnswer ? <button className="primary wide" onClick={() => setShowAnswer(true)}>Показать ответ</button> :
       <>
         {answerError && <section className="hint centered" role="alert"><p>Не удалось подтвердить ответ.</p><button className="primary" disabled={isSubmitting} onClick={retryAnswer}>Повторить отправку</button></section>}
         <div className="ratings">{ratings.map(([rating, interval, label]) => <button disabled={isSubmitting || answerAttempt !== null} key={rating} onClick={() => answer(rating)}>{label}<small>{card.intervals[interval]}</small></button>)}</div>
@@ -235,6 +365,7 @@ export function App(): JSX.Element {
   const [cardCreateDeckId, setCardCreateDeckId] = useState<number | null>(null);
   const [cardBrowserQuery, setCardBrowserQuery] = useState<string | null>(null);
   const [openedCardId, setOpenedCardId] = useState<number | null>(null);
+  const [studyReturnDeckId, setStudyReturnDeckId] = useState<number | "all" | null>(null);
   const [importDeckId, setImportDeckId] = useState<number | null>(null);
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -248,6 +379,14 @@ export function App(): JSX.Element {
     window.history.replaceState(window.history.state, "", url);
     setShareToken(null);
   }, []);
+  const closeCardScreen = () => {
+    const returnDeckId = studyReturnDeckId;
+    setOpenedCardId(null);
+    setStudyReturnDeckId(null);
+    if (returnDeckId !== null) {
+      setStudyDeckId(returnDeckId);
+    }
+  };
 
   if (unauthorized) {
     return <main className="hint centered">Откройте приложение из Telegram</main>;
@@ -256,7 +395,11 @@ export function App(): JSX.Element {
     return <main><ShareInstallScreen onClose={closeShareScreen} onStudy={(deckId) => { closeShareScreen(); setStudyDeckId(deckId); }} onUnauthorized={showUnauthorized} token={shareToken} /></main>;
   }
   if (studyDeckId !== null) {
-    return <main><Session deckId={studyDeckId} onClose={() => setStudyDeckId(null)} onUnauthorized={showUnauthorized} /></main>;
+    return <main><Session deckId={studyDeckId} onClose={() => setStudyDeckId(null)} onEditCard={(cardId) => {
+      setStudyReturnDeckId(studyDeckId);
+      setStudyDeckId(null);
+      setOpenedCardId(cardId);
+    }} onUnauthorized={showUnauthorized} /></main>;
   }
   if (catalogOpen) {
     return <main><Catalog onClose={() => setCatalogOpen(false)} onUnauthorized={showUnauthorized} /></main>;
@@ -268,10 +411,13 @@ export function App(): JSX.Element {
     return <main><CardCreateScreen deckId={cardCreateDeckId} onClose={() => setCardCreateDeckId(null)} onUnauthorized={showUnauthorized} /></main>;
   }
   if (openedCardId !== null) {
-    return <main><CardScreen cardId={openedCardId} onBack={() => setOpenedCardId(null)} onDeleted={() => setOpenedCardId(null)} onUnauthorized={showUnauthorized} /></main>;
+    return <main><CardScreen cardId={openedCardId} onBack={closeCardScreen} onDeleted={closeCardScreen} onUnauthorized={showUnauthorized} /></main>;
   }
   if (cardBrowserQuery !== null) {
-    return <main><CardsBrowser initialQuery={cardBrowserQuery} onClose={() => setCardBrowserQuery(null)} onOpenCard={setOpenedCardId} onUnauthorized={showUnauthorized} /></main>;
+    return <main><CardsBrowser initialQuery={cardBrowserQuery} onClose={() => setCardBrowserQuery(null)} onOpenCard={(cardId) => {
+      setStudyReturnDeckId(null);
+      setOpenedCardId(cardId);
+    }} onUnauthorized={showUnauthorized} /></main>;
   }
   if (importDeckId !== null) {
     return <main><ImportScreen initialDeckId={importDeckId} onClose={() => { setImportDeckId(null); setOpenedDeckId(null); }} onUnauthorized={showUnauthorized} /></main>;

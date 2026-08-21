@@ -119,6 +119,8 @@ def test_repeated_request_replays_saved_answer_without_side_effects(
     assert second.status_code == 200
     assert first.json()["replayed"] is False
     assert second.json()["replayed"] is True
+    assert first.json()["leech"] is None
+    assert second.json()["leech"] is None
     assert second.json()["state"] == first.json()["state"]
     assert second.json()["due"] == first.json()["due"]
 

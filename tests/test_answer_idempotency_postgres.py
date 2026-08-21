@@ -18,8 +18,10 @@ from app.deps import get_current_user, get_db_session
 from app.main import create_app
 from bot.config import get_settings
 from bot.models import Card, DailyStudyCounter, Event, ReviewLog
-from bot.services.cards import create_basic_note
+from bot.services.cards import create_basic_note, reset_card, set_card_suspended
 from bot.services.decks import create_deck
+from bot.services.leeches import LeechResumeConflictError, resume_leech
+from bot.services.study import answer_card_request
 from bot.services.users import get_or_create_user
 
 TEST_DATABASE_ENV = "FLIPI_TEST_DATABASE_URL"
@@ -240,3 +242,224 @@ def test_concurrent_key_reuse_for_different_cards_conflicts_without_extra_mutati
     assert reviews[0].request_id == payloads[0]["request_id"]
     assert counter_total == 1
     assert event_count == 1
+
+
+def test_concurrent_cross_card_leech_key_rolls_back_losing_alert_atomically(
+    postgres_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    user_id, card_ids = asyncio.run(_create_cards(postgres_session_factory, 2))
+
+    async def prepare() -> None:
+        async with postgres_session_factory() as session:
+            cards = list(
+                (
+                    await session.scalars(
+                        select(Card).where(Card.id.in_(card_ids)).order_by(Card.id)
+                    )
+                ).all()
+            )
+            for card in cards:
+                card.state = "review"
+                card.review_lapses = 3
+            await session.commit()
+
+    asyncio.run(prepare())
+    request_id = "concurrent-cross-card-leech-key"
+    payloads = (
+        {"card_id": card_ids[0], "rating": 1, "request_id": request_id},
+        {"card_id": card_ids[1], "rating": 1, "request_id": request_id},
+    )
+
+    responses = asyncio.run(
+        _post_concurrently(postgres_session_factory, user_id, payloads)
+    )
+
+    assert sorted(response.status_code for response in responses) == [200, 409]
+    winner_index = next(
+        index for index, response in enumerate(responses) if response.status_code == 200
+    )
+    winner_card_id = payloads[winner_index]["card_id"]
+    loser_card_id = payloads[1 - winner_index]["card_id"]
+    winner_body = responses[winner_index].json()
+    assert winner_body["leech"] == {"review_lapses": 4, "auto_suspended": True}
+
+    async def inspect() -> tuple[Card, Card, ReviewLog, int, int, int]:
+        async with postgres_session_factory() as session:
+            winner = await session.get(Card, winner_card_id)
+            loser = await session.get(Card, loser_card_id)
+            review = (await session.scalars(select(ReviewLog))).one()
+            counter_total = await session.scalar(
+                select(
+                    func.coalesce(
+                        func.sum(
+                            DailyStudyCounter.new_seen + DailyStudyCounter.reviews_done
+                        ),
+                        0,
+                    )
+                )
+            )
+            review_events = await session.scalar(
+                select(func.count(Event.id)).where(Event.name == "review_answer")
+            )
+            leech_events = await session.scalar(
+                select(func.count(Event.id)).where(Event.name == "leech_detected")
+            )
+            return (
+                winner,
+                loser,
+                review,
+                int(counter_total or 0),
+                int(review_events or 0),
+                int(leech_events or 0),
+            )
+
+    winner, loser, review, counter_total, review_events, leech_events = asyncio.run(
+        inspect()
+    )
+    assert winner.review_lapses == 4
+    assert winner.suspended is True
+    assert winner.leech_suspended_lapses == 4
+    assert loser.review_lapses == 3
+    assert loser.suspended is False
+    assert loser.leech_suspended_lapses is None
+    assert loser.reps == 0
+    assert review.card_id == winner_card_id
+    assert review.request_id == request_id
+    assert review.leech_alert_lapses == 4
+    assert counter_total == 1
+    assert review_events == 1
+    assert leech_events == 1
+
+
+def test_concurrent_fourth_review_lapse_triggers_one_leech_alert(
+    postgres_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    user_id, card_ids = asyncio.run(_create_cards(postgres_session_factory, 1))
+
+    async def prepare() -> None:
+        async with postgres_session_factory() as session:
+            card = await session.get(Card, card_ids[0])
+            card.state = "review"
+            card.review_lapses = 3
+            await session.commit()
+
+    asyncio.run(prepare())
+    payload = {
+        "card_id": card_ids[0],
+        "rating": 1,
+        "request_id": "concurrent-fourth-review-lapse",
+    }
+
+    responses = asyncio.run(
+        _post_concurrently(postgres_session_factory, user_id, (payload, payload))
+    )
+
+    assert [response.status_code for response in responses] == [200, 200]
+    bodies = [response.json() for response in responses]
+    assert sorted(body["replayed"] for body in bodies) == [False, True]
+    assert {body["leech"]["review_lapses"] for body in bodies} == {4}
+    assert all(body["leech"]["auto_suspended"] is True for body in bodies)
+
+    async def inspect() -> tuple[Card, ReviewLog, int, int, int]:
+        async with postgres_session_factory() as session:
+            card = await session.get(Card, card_ids[0])
+            review = (await session.scalars(select(ReviewLog))).one()
+            counter_total = await session.scalar(
+                select(
+                    func.coalesce(
+                        func.sum(
+                            DailyStudyCounter.new_seen + DailyStudyCounter.reviews_done
+                        ),
+                        0,
+                    )
+                )
+            )
+            review_events = await session.scalar(
+                select(func.count(Event.id)).where(Event.name == "review_answer")
+            )
+            leech_events = await session.scalar(
+                select(func.count(Event.id)).where(Event.name == "leech_detected")
+            )
+            return (
+                card,
+                review,
+                int(counter_total or 0),
+                int(review_events or 0),
+                int(leech_events or 0),
+            )
+
+    card, review, counter_total, review_events, leech_events = asyncio.run(inspect())
+    assert card.review_lapses == 4
+    assert card.suspended is True
+    assert card.leech_suspended_lapses == 4
+    assert review.leech_alert_lapses == 4
+    assert counter_total == 1
+    assert review_events == 1
+    assert leech_events == 1
+
+
+def test_manual_actions_reload_cards_changed_by_a_concurrent_leech_answer(
+    postgres_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    user_id, card_ids = asyncio.run(_create_cards(postgres_session_factory, 2))
+
+    async def exercise_stale_sessions() -> None:
+        async with postgres_session_factory() as stale_session:
+            stale_cards = list(
+                (
+                    await stale_session.scalars(
+                        select(Card).where(Card.id.in_(card_ids)).order_by(Card.id)
+                    )
+                ).all()
+            )
+
+            async with postgres_session_factory() as prepare_session:
+                cards = list(
+                    (
+                        await prepare_session.scalars(
+                            select(Card).where(Card.id.in_(card_ids)).order_by(Card.id)
+                        )
+                    ).all()
+                )
+                for card in cards:
+                    card.state = "review"
+                    card.review_lapses = 3
+                await prepare_session.commit()
+
+            async with postgres_session_factory() as answer_session:
+                user = SimpleNamespace(id=user_id, timezone="UTC")
+                for index, card_id in enumerate(card_ids):
+                    result = await answer_card_request(
+                        answer_session,
+                        user,
+                        card_id,
+                        1,
+                        request_id=f"stale-manual-action-{index}",
+                    )
+                    assert result is not None
+                    assert result.leech_alert_lapses == 4
+
+            assert [card.review_lapses for card in stale_cards] == [0, 0]
+            await set_card_suspended(stale_session, stale_cards[0], True)
+            await reset_card(stale_session, stale_cards[1])
+
+        async with postgres_session_factory() as inspect_session:
+            manually_suspended = await inspect_session.get(Card, card_ids[0])
+            reset = await inspect_session.get(Card, card_ids[1])
+            assert manually_suspended.review_lapses == 4
+            assert manually_suspended.suspended is True
+            assert manually_suspended.leech_suspended_lapses is None
+            assert reset.state == "new"
+            assert reset.review_lapses == 0
+            assert reset.suspended is False
+            assert reset.leech_suspended_lapses is None
+
+            with pytest.raises(LeechResumeConflictError):
+                await resume_leech(
+                    inspect_session,
+                    SimpleNamespace(id=user_id),
+                    card_ids[0],
+                    4,
+                )
+
+    asyncio.run(exercise_stale_sessions())
