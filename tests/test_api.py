@@ -3,7 +3,7 @@ import hashlib
 import hmac
 import json
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from urllib.parse import urlencode
 
@@ -13,7 +13,7 @@ from sqlalchemy import select
 
 from app.deps import get_db_session
 from app.main import create_app
-from bot.models import Card, MediaFile, NoteStyle, ReviewLog, User
+from bot.models import Card, DailyStudyCounter, MediaFile, NoteStyle, ReviewLog, User
 from bot.services.decks import archive_deck, create_deck
 from bot.services.users import get_or_create_user
 
@@ -493,6 +493,98 @@ def test_study_answer_records_review_buries_siblings_and_returns_media(session_f
     assert response.json()["state"] == "review"
 
 
+def test_again_is_counted_once_and_keeps_today_learning_step_in_global_goal(
+    session_factory,
+    monkeypatch,
+) -> None:
+    import app.api as api_module
+    import bot.services.cards as cards_service
+    import bot.services.study as study_service
+    import bot.services.timezones as timezones_service
+    from bot.services.cards import create_basic_note
+
+    fixed_now = datetime(2026, 3, 10, 12, tzinfo=UTC)
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return fixed_now.replace(tzinfo=None)
+            return fixed_now.astimezone(tz)
+
+    def fixed_again_review(card, deck, rating_value: int, elapsed_ms: int | None = None):
+        assert rating_value == 1
+        previous_due = card.due_at
+        card.state = "learning"
+        card.due_at = fixed_now + timedelta(minutes=1)
+        card.reps += 1
+        card.lapses += 1
+        return ReviewLog(
+            user_id=card.user_id,
+            deck_id=deck.id,
+            card_id=card.id,
+            rating=rating_value,
+            reviewed_at=fixed_now,
+            elapsed_ms=elapsed_ms,
+            previous_due_at=previous_due,
+            next_due_at=card.due_at,
+        )
+
+    monkeypatch.setattr(api_module, "datetime", FixedDateTime)
+    monkeypatch.setattr(cards_service, "datetime", FixedDateTime)
+    monkeypatch.setattr(timezones_service, "datetime", FixedDateTime)
+    monkeypatch.setattr(study_service, "review_with_fsrs", fixed_again_review)
+
+    async def create_data() -> tuple[int, int]:
+        async with session_factory() as session:
+            user = await get_or_create_user(session, TelegramUser())
+            user.timezone = "UTC"
+            deck = await create_deck(session, user, "Again")
+            note = await create_basic_note(session, user, deck, "front", "back")
+            card = (
+                await session.execute(select(Card).where(Card.note_id == note.id))
+            ).scalar_one()
+            card.due_at = fixed_now
+            await session.commit()
+            return deck.id, card.id
+
+    deck_id, card_id = asyncio.run(create_data())
+    app = build_app(session_factory, monkeypatch)
+    headers = {"X-Telegram-Init-Data": signed_init_data()}
+    answer_payload = {
+        "card_id": card_id,
+        "rating": 1,
+        "elapsed_ms": 100,
+        "request_id": "again-goal-once",
+    }
+
+    first_answer = post_request(app, "/api/study/answer", answer_payload, headers)
+    replayed_answer = post_request(app, "/api/study/answer", answer_payload, headers)
+    next_response = request(app, f"/api/study/next?deck_id={deck_id}", headers)
+
+    assert first_answer.status_code == 200
+    assert first_answer.json()["replayed"] is False
+    assert replayed_answer.status_code == 200
+    assert replayed_answer.json()["replayed"] is True
+    assert next_response.json() == {
+        "card_id": None,
+        "done_today": 1,
+        "goals": {
+            "streak": {"done": 0, "target": 10, "achieved": False},
+            "full": {"remaining": 1, "achieved": False},
+        },
+    }
+
+    async def persisted_state() -> tuple[int, int, str, int, int]:
+        async with session_factory() as session:
+            reviews = list((await session.execute(select(ReviewLog))).scalars())
+            counter = (await session.execute(select(DailyStudyCounter))).scalar_one()
+            card = await session.get(Card, card_id)
+            return len(reviews), counter.new_seen, card.state, card.reps, card.lapses
+
+    assert asyncio.run(persisted_state()) == (1, 1, "learning", 1, 1)
+
+
 def test_media_endpoint_is_private_to_the_current_user(session_factory, monkeypatch) -> None:
     async def create_data() -> int:
         async with session_factory() as session:
@@ -550,8 +642,48 @@ def test_study_next_all_iterates_decks_then_reports_done_today(session_factory, 
     done = request(app, "/api/study/next?deck_id=all", headers)
 
     assert first["deck_name"] == "Alpha"
+    assert first["goals"] == {
+        "streak": {"done": 0, "target": 10, "achieved": False},
+        "full": {"remaining": 2, "achieved": False},
+    }
     assert second["deck_name"] == "Beta"
-    assert done.json() == {"card_id": None, "done_today": 2}
+    done_payload = done.json()
+    assert done_payload["card_id"] is None
+    assert done_payload["done_today"] == 2
+    assert done_payload["goals"]["streak"] == {
+        "done": 2,
+        "target": 10,
+        "achieved": False,
+    }
+    assert set(done_payload["goals"]) == {"streak", "full"}
+
+
+def test_study_next_for_empty_deck_returns_global_goals(session_factory, monkeypatch) -> None:
+    from bot.services.cards import create_basic_note
+
+    async def create_data() -> int:
+        async with session_factory() as session:
+            user = await get_or_create_user(session, TelegramUser())
+            empty = await create_deck(session, user, "Empty")
+            other = await create_deck(session, user, "Other")
+            await create_basic_note(session, user, other, "other", "other")
+            return empty.id
+
+    empty_deck_id = asyncio.run(create_data())
+    app = build_app(session_factory, monkeypatch)
+    headers = {"X-Telegram-Init-Data": signed_init_data()}
+
+    response = request(app, f"/api/study/next?deck_id={empty_deck_id}", headers)
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "card_id": None,
+        "done_today": 0,
+        "goals": {
+            "streak": {"done": 0, "target": 10, "achieved": False},
+            "full": {"remaining": 1, "achieved": False},
+        },
+    }
 
 
 def test_cards_api_creates_reverse_cards_and_renders_sanitized_details(

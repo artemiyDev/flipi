@@ -1,4 +1,4 @@
-from datetime import UTC, date
+from datetime import UTC, date, datetime
 from pathlib import Path
 import sqlite3
 from typing import Annotated, Literal
@@ -64,6 +64,7 @@ from bot.services.decks import (
     update_deck_settings,
 )
 from bot.services.events import track
+from bot.services.goals import daily_goal_progress
 from bot.services.optimizer import (
     InsufficientHistoryError,
     MINIMUM_REVIEW_COUNT,
@@ -837,6 +838,7 @@ async def study_next(
     user: Annotated[User, Depends(get_current_user)],
     deck_id: str = "all",
 ) -> dict:
+    now_utc = datetime.now(UTC)
     if deck_id == "all":
         card = await get_next_card_for_user(session, user)
     else:
@@ -849,8 +851,13 @@ async def study_next(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deck not found")
         card = await get_next_due_card(session, deck, user.timezone)
 
+    goals = await daily_goal_progress(session, user, now_utc)
     if card is None:
-        return {"card_id": None, "done_today": await count_done_today(session, user)}
+        return {
+            "card_id": None,
+            "done_today": await count_done_today(session, user, now_utc),
+            "goals": goals,
+        }
 
     question_html = card_question_html(card)
     answer_html = card_answer_html(card)
@@ -868,6 +875,7 @@ async def study_next(
             "learning": learning_count,
             "review": review_count,
         },
+        "goals": goals,
         "question_html": sanitize_card_html(
             replace_image_media_references(question_html, media_files)
         ),

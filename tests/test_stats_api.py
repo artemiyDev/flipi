@@ -179,8 +179,18 @@ def test_overview_calculates_continuous_streak(
             today = user_today(user.timezone)
             session.add_all(
                 [
-                    review_log(card, local_datetime(today + timedelta(days=offset), user.timezone), 3)
+                    review_log(
+                        card,
+                        local_datetime(
+                            today + timedelta(days=offset),
+                            user.timezone,
+                            12,
+                            minute,
+                        ),
+                        3,
+                    )
                     for offset in review_offsets
+                    for minute in range(10)
                 ]
             )
             await session.commit()
