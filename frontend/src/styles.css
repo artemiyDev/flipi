@@ -32,6 +32,7 @@ nav .active { color: var(--tg-button-color); }
 .daily-goals span { min-width: 0; overflow-wrap: anywhere; }
 .session-header > .daily-goals { grid-column: 1 / -1; }
 .close { font-size: 28px; line-height: 1; padding: 0 4px; }
+.learn-ahead-hint { min-width: 0; margin: 0 0 12px; padding: 8px 10px; border: 1px solid #e8a33d; border-radius: 8px; color: var(--tg-hint-color); font-size: 13px; overflow-wrap: anywhere; }
 .card-content { min-height: 40vh; padding: 16px; margin-bottom: 16px; background: var(--tg-secondary-bg-color); overflow-wrap: anywhere; }
 .card-content img, .card-content audio { max-width: 100%; display: block; margin: 12px auto; }
 .card-content hr { border: 0; border-top: 1px solid var(--tg-hint-color); margin: 20px 0; }

@@ -1,21 +1,23 @@
 import html
+import math
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from bot.models import Card, DailyStudyCounter, Deck, Note, User
-from bot.services.scheduler import new_fsrs_card_json
 from bot.services.leeches import LEECH_THRESHOLD
-from bot.services.timezones import user_today
+from bot.services.scheduler import new_fsrs_card_json
+from bot.services.timezones import user_local_date, user_today
 
 CLOZE_RE = re.compile(r"{{c(\d+)::(.*?)(?:::(.*?))?}}", flags=re.DOTALL)
 CLOZE_CREATE_RE = re.compile(r"{{c([1-9]\d*)::(.+?)(?:::(.*?))?}}", flags=re.DOTALL)
 TAG_RE = re.compile(r"<[^>]+>")
 IMG_RE = re.compile(r"""(?is)<img\b[^>]*\bsrc=["']?([^"'\s>]+)["']?[^>]*>""")
+LEARN_AHEAD_MINUTES = 20
 
 
 @dataclass(frozen=True)
@@ -560,10 +562,15 @@ async def get_next_due_card(
     session: AsyncSession,
     deck: Deck,
     timezone_name: str = "UTC",
+    now_utc: datetime | None = None,
+    *,
+    include_learn_ahead: bool = True,
 ) -> Card | None:
-    now = datetime.now(UTC)
-    today = user_today(timezone_name)
-    counter = await get_daily_study_counter(session, deck, timezone_name)
+    if deck.is_archived:
+        return None
+    now = now_utc or datetime.now(UTC)
+    today = user_local_date(now, timezone_name)
+    counter = await get_daily_study_counter(session, deck, timezone_name, now)
     can_show_new = counter.new_seen < deck.new_cards_per_day
     can_show_review = counter.reviews_done < deck.reviews_per_day
     base_filters = [
@@ -590,7 +597,68 @@ async def get_next_due_card(
         card = result.scalar_one_or_none()
         if card is not None:
             return card
-    return None
+    if not include_learn_ahead:
+        return None
+    result = await session.execute(
+        select(Card)
+        .where(
+            Card.deck_id == deck.id,
+            Card.user_id == deck.user_id,
+            Card.suspended.is_(False),
+            or_(Card.buried_until.is_(None), Card.buried_until < today),
+            Card.state.in_(["learning", "relearning"]),
+            Card.due_at > now,
+            Card.due_at <= now + timedelta(minutes=LEARN_AHEAD_MINUTES),
+        )
+        .order_by(Card.due_at.asc(), Card.id.asc())
+        .options(selectinload(Card.note), selectinload(Card.deck))
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
+async def get_next_learn_ahead_card_for_user(
+    session: AsyncSession,
+    user: User,
+    now_utc: datetime,
+) -> Card | None:
+    today = user_local_date(now_utc, user.timezone)
+    result = await session.execute(
+        select(Card)
+        .join(Card.deck)
+        .where(
+            Card.user_id == user.id,
+            Deck.user_id == user.id,
+            Deck.is_archived.is_(False),
+            Card.suspended.is_(False),
+            or_(Card.buried_until.is_(None), Card.buried_until < today),
+            Card.state.in_(["learning", "relearning"]),
+            Card.due_at > now_utc,
+            Card.due_at <= now_utc + timedelta(minutes=LEARN_AHEAD_MINUTES),
+        )
+        .order_by(Card.due_at.asc(), Card.id.asc())
+        .options(selectinload(Card.note), selectinload(Card.deck))
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
+def learn_ahead_payload(card: Card, now_utc: datetime) -> dict[str, str | int] | None:
+    if card.state not in {"learning", "relearning"}:
+        return None
+    due_at = card.due_at
+    if due_at.tzinfo is None:
+        due_at = due_at.replace(tzinfo=UTC)
+    else:
+        due_at = due_at.astimezone(UTC)
+    normalized_now = now_utc if now_utc.tzinfo is not None else now_utc.replace(tzinfo=UTC)
+    seconds_early = (due_at - normalized_now).total_seconds()
+    if seconds_early <= 0 or seconds_early > LEARN_AHEAD_MINUTES * 60:
+        return None
+    return {
+        "scheduled_for": due_at.isoformat().replace("+00:00", "Z"),
+        "seconds_early": max(1, math.ceil(seconds_early)),
+    }
 
 
 async def get_next_review_ahead_card(
@@ -645,8 +713,13 @@ async def get_daily_study_counter(
     session: AsyncSession,
     deck: Deck,
     timezone_name: str = "UTC",
+    now_utc: datetime | None = None,
 ) -> DailyStudyCounter:
-    today = user_today(timezone_name)
+    today = (
+        user_local_date(now_utc, timezone_name)
+        if now_utc is not None
+        else user_today(timezone_name)
+    )
     result = await session.execute(
         select(DailyStudyCounter).where(
             DailyStudyCounter.user_id == deck.user_id,
@@ -735,16 +808,16 @@ async def get_next_due_card_by_query(
     session: AsyncSession,
     user: User,
     query: str,
+    now_utc: datetime | None = None,
 ) -> Card | None:
-    now = datetime.now(UTC)
-    today = user_today(user.timezone)
-    base_filters = _build_card_query_filters(user, query, now, today, session.bind.dialect.name)
-    base_filters.extend(
+    now = now_utc or datetime.now(UTC)
+    today = user_local_date(now, user.timezone)
+    queue_filters = _build_card_query_filters(user, query, now, today, session.bind.dialect.name)
+    queue_filters.extend(
         [
             Deck.is_archived.is_(False),
             Card.suspended.is_(False),
             or_(Card.buried_until.is_(None), Card.buried_until < today),
-            Card.due_at <= now,
         ]
     )
     priorities = [
@@ -758,24 +831,43 @@ async def get_next_due_card_by_query(
             select(Card)
             .join(Card.note)
             .join(Card.deck)
-            .where(*base_filters, priority)
+            .where(*queue_filters, Card.due_at <= now, priority)
             .options(selectinload(Card.note), selectinload(Card.deck))
             .order_by(Card.due_at.asc(), Card.id.asc())
             .limit(50)
         )
         for card in result.scalars():
-            counter = await get_daily_study_counter(session, card.deck, user.timezone)
+            counter = await get_daily_study_counter(session, card.deck, user.timezone, now)
             if card.state == "new" and counter.new_seen >= card.deck.new_cards_per_day:
                 continue
             if card.state == "review" and counter.reviews_done >= card.deck.reviews_per_day:
                 continue
             return card
-    return None
+    result = await session.execute(
+        select(Card)
+        .join(Card.note)
+        .join(Card.deck)
+        .where(
+            *queue_filters,
+            Card.state.in_(["learning", "relearning"]),
+            Card.due_at > now,
+            Card.due_at <= now + timedelta(minutes=LEARN_AHEAD_MINUTES),
+        )
+        .options(selectinload(Card.note), selectinload(Card.deck))
+        .order_by(Card.due_at.asc(), Card.id.asc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
 
 
-async def count_cards_by_query(session: AsyncSession, user: User, query: str) -> int:
-    now = datetime.now(UTC)
-    today = user_today(user.timezone)
+async def count_cards_by_query(
+    session: AsyncSession,
+    user: User,
+    query: str,
+    now_utc: datetime | None = None,
+) -> int:
+    now = now_utc or datetime.now(UTC)
+    today = user_local_date(now, user.timezone)
     filters = _build_card_query_filters(user, query, now, today, session.bind.dialect.name)
     result = await session.execute(
         select(func.count(Card.id))
@@ -786,15 +878,26 @@ async def count_cards_by_query(session: AsyncSession, user: User, query: str) ->
     return int(result.scalar_one())
 
 
-async def count_due_cards_by_query(session: AsyncSession, user: User, query: str) -> int:
-    now = datetime.now(UTC)
-    today = user_today(user.timezone)
+async def count_due_cards_by_query(
+    session: AsyncSession,
+    user: User,
+    query: str,
+    now_utc: datetime | None = None,
+) -> int:
+    now = now_utc or datetime.now(UTC)
+    today = user_local_date(now, user.timezone)
     filters = _build_card_query_filters(user, query, now, today, session.bind.dialect.name)
     filters.extend(
         [
             Card.suspended.is_(False),
             or_(Card.buried_until.is_(None), Card.buried_until < today),
-            Card.due_at <= now,
+            or_(
+                Card.due_at <= now,
+                and_(
+                    Card.state.in_(["learning", "relearning"]),
+                    Card.due_at <= now + timedelta(minutes=LEARN_AHEAD_MINUTES),
+                ),
+            ),
         ]
     )
     result = await session.execute(

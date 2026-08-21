@@ -99,6 +99,10 @@ export interface StudyCard {
   card_id: number;
   deck_id: number;
   deck_name: string;
+  learn_ahead: {
+    scheduled_for: string;
+    seconds_early: number;
+  } | null;
   progress: Progress;
   goals: DailyGoals;
   question_html: string;

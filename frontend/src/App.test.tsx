@@ -24,6 +24,7 @@ function studyCard(goals = dailyGoals(), deckName = "Spanish") {
     card_id: 7,
     deck_id: 1,
     deck_name: deckName,
+    learn_ahead: null,
     progress: {new: 1, learning: 0, review: 0},
     goals,
     question_html: "<b>Question</b>",
@@ -137,6 +138,23 @@ describe("Mini App", () => {
     expect(screen.getByText("День закрыт ✓")).toBeInTheDocument();
     expect(screen.getByTitle(longName)).toHaveClass("session-deck-name");
     expect(document.querySelector(".session-header > .daily-goals")).toBeInTheDocument();
+    expect(screen.queryByText(/Повтор чуть раньше/)).not.toBeInTheDocument();
+  });
+
+  it.each([
+    {secondsEarly: 1, minutes: 1},
+    {secondsEarly: 61, minutes: 2},
+  ])("shows a rounded learn-ahead hint for $secondsEarly seconds", async ({secondsEarly, minutes}) => {
+    apiMocks.fetchDecks.mockResolvedValue([{id: 1, name: "Spanish", new_count: 0, learning_count: 1, review_count: 0}]);
+    apiMocks.fetchNextCard.mockResolvedValueOnce({
+      ...studyCard(),
+      learn_ahead: {scheduled_for: "2026-08-21T17:10:00Z", seconds_early: secondsEarly},
+    });
+    render(<App />);
+
+    fireEvent.click(await screen.findByText("Spanish"));
+
+    expect(await screen.findByText(`Повтор чуть раньше · через ${minutes} мин`)).toHaveClass("learn-ahead-hint");
   });
 
   it("shows an unauthorized placeholder after a 401 response", async () => {
